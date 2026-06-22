@@ -206,6 +206,10 @@ trainer:
     # Trainer mode: "sync", "colocate_async", "separate_async"
     trainer_mode: sync
 
+    # Optional: file path or "pkg://"/dotted module to import before resolving trainer_mode,
+    # so a user module's @register_trainer side effect populates TRAINER_REGISTRY.
+    custom_trainer_path: null
+
     # Synchronous PPO trainer
     sync: {}
 

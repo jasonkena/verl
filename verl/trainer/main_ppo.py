@@ -23,7 +23,7 @@ from verl.trainer.constants_ppo import get_ppo_ray_runtime_env
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.config import validate_config
 from verl.utils.device import auto_set_device, is_cuda_available
-from verl.utils.import_utils import load_class_from_fqn
+from verl.utils.import_utils import load_class_from_fqn, load_module
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
@@ -122,6 +122,14 @@ class TaskRunnerV1:
         import transfer_queue as tq
 
         from verl.trainer.ppo.v1 import get_trainer_cls
+
+        # Optional: import a user module so its `@register_trainer(...)` side effect
+        # populates TRAINER_REGISTRY before we look up `trainer_mode`. TRAINER_REGISTRY
+        # is import-populated only (no external registration hook), so a custom V1
+        # trainer must be imported here. Accepts a file path or a "pkg://"/dotted module.
+        custom_trainer_path = config.trainer.v1.get("custom_trainer_path", None)
+        if custom_trainer_path:
+            load_module(custom_trainer_path)
 
         trainer_cls = get_trainer_cls(config.trainer.v1.trainer_mode)
 
