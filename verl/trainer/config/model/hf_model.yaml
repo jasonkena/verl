@@ -27,6 +27,11 @@ custom_chat_template: null
 # whether to use external libs for the model
 external_lib: null
 
+# model_type key selecting the training engine in EngineRegistry (HFModelConfig.model_type).
+# Default "language_model" -> FSDPEngineWithLMHead. The contextdistillation fork sets
+# "teacher_student_language_model" to pick TeacherStudentFSDPEngine (M4).
+model_type: language_model
+
 # override hf config
 override_config: {}
 

@@ -579,10 +579,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             else:
                 assert self.config.rollout.log_prob_micro_batch_size_per_gpu is not None
                 assert self.config.actor.ppo_micro_batch_size_per_gpu is not None
+            # contextdistillation fork: teacher/student context distillation gates off the
+            # same model_type that selects TeacherStudentFSDPEngine (registered in the worker
+            # via model.external_lib). The loss adds the local KL(teacher‖student) on top of
+            # the standard PPO term; kl_local_coef==0 makes it identical to ppo_loss.
+            teacher_student_enabled = (
+                actor_config.model_config.get("model_type", "language_model") == "teacher_student_language_model"
+            )
             if self.distillation_enabled:
                 self.loss_fn = partial(
                     distillation_ppo_loss, config=actor_config, distillation_config=distillation_config
                 )
+            elif teacher_student_enabled:
+                from contextdistillation.verl_teacher_student.losses import teacher_student_ppo_loss
+
+                self.loss_fn = partial(teacher_student_ppo_loss, config=actor_config)
             else:
                 self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = self.actor_worker_cls(config=actor_training_config)
