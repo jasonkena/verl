@@ -188,6 +188,14 @@ class ActorConfig(BaseConfig):
     # 0.0 ⇒ term OFF: the engine skips the third (ref) forward and need_reference_policy stays
     # driven by the PPO knobs. Non-zero ⇒ the ref worker is forced on and colocated.
     kl_ref_grad_scale: float = 0.0
+    # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
+    # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
+    # When true, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO
+    # advantage before delegating to ppo_loss, so verl's clipped-IS-ratio PG produces it. The
+    # term is purely teacher-path, so it reuses each KL's teacher-path coefficient
+    # (kl_teacher_grad_scale for the local KL, kl_ref_grad_scale for the ref KL) — no separate
+    # coefficient. Default false ⇒ the advantage is untouched (byte-for-byte M4/M6).
+    use_global_kl_term: bool = False
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

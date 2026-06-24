@@ -126,6 +126,13 @@ kl_student_grad_scale: 1.0
 # => the colocated ref worker is forced on and reused for a live forward on the student sequence.
 kl_ref_grad_scale: 0.0
 
+# contextdistillation fork (M7): enable the SECOND Tang–Munos term of ∇KL, the global
+# (score-function) term Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s. When true, the teacher_student
+# loss folds a per-token KL reward-to-go into the PPO advantage so verl's clipped-IS-ratio PG
+# produces it; it reuses each KL's teacher-path coefficient (kl_teacher_grad_scale /
+# kl_ref_grad_scale) — no separate coefficient. Default false => advantage untouched (M4/M6).
+use_global_kl_term: false
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 
