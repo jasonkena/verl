@@ -174,12 +174,12 @@ class ActorConfig(BaseConfig):
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
     kl_loss_type: str = "low_var_kl"
-    # Teacher/student context distillation (contextdistillation fork, M4): the local
-    # full-vocab forward-KL(teacher‖student) coefficient β and the independent
-    # straight-through gradient scales for the teacher / student path. Only consumed when
+    # Teacher/student context distillation (contextdistillation fork, M4): the independent
+    # straight-through gradient scales for the teacher / student path of the local full-vocab
+    # forward-KL(teacher‖student). They also carry the KL weight β (a global coefficient folds
+    # into both per-path scales, so there is no separate kl_local_coef). Only consumed when
     # model.model_type == "teacher_student_language_model" (selects TeacherStudentFSDPEngine
-    # + teacher_student_ppo_loss). kl_local_coef == 0.0 ⇒ vanilla PPO (student forward skipped).
-    kl_local_coef: float = 0.0
+    # + teacher_student_ppo_loss). Both 0.0 ⇒ KL gradient frozen (value still logged).
     kl_teacher_grad_scale: float = 1.0
     kl_student_grad_scale: float = 1.0
     ppo_epochs: int = 1

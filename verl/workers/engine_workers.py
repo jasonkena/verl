@@ -582,7 +582,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # contextdistillation fork: teacher/student context distillation gates off the
             # same model_type that selects TeacherStudentFSDPEngine (registered in the worker
             # via model.external_lib). The loss adds the local KL(teacher‖student) on top of
-            # the standard PPO term; kl_local_coef==0 makes it identical to ppo_loss.
+            # the standard PPO term; the KL weight lives in the per-path grad scales.
             teacher_student_enabled = (
                 actor_config.model_config.get("model_type", "language_model") == "teacher_student_language_model"
             )

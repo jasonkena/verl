@@ -111,12 +111,11 @@ kl_loss_coef: 0.001
 # Type of KL divergence loss. Options: "kl"(k1), "abs", "mse"(k2), "low_var_kl"(k3), "full"
 kl_loss_type: low_var_kl
 
-# contextdistillation fork (M4): local full-vocab forward-KL(teacher‖student) coefficient.
-# Only used when model.model_type == teacher_student_language_model. 0.0 => vanilla PPO.
-kl_local_coef: 0.0
-
 # contextdistillation fork (M4): independent straight-through gradient scales for the
-# teacher / student path of the local KL (value unchanged; scales only the gradient).
+# teacher / student path of the local full-vocab forward-KL(teacher‖student). Value
+# unchanged; these scale only the gradient and also carry the KL weight β (a global
+# coefficient folds into both, so there is no separate kl_local_coef). Only used when
+# model.model_type == teacher_student_language_model. Both 0.0 => KL gradient frozen.
 kl_teacher_grad_scale: 1.0
 
 kl_student_grad_scale: 1.0
