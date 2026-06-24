@@ -72,11 +72,38 @@ class Role(Enum):
         return role
 
 
+def need_ppo_ref_log_prob(
+    config: DictConfig,
+) -> bool:
+    """Does the PPO pipeline itself consume a per-token ``ref_log_prob``?
+
+    True iff one of PPO's own ref-KL regularizers is on: the reward-side sequence KL
+    (``algorithm.use_kl_in_reward`` → ``apply_kl_penalty`` in ``_compute_advantage``) or the
+    loss-side KL (``actor.use_kl_loss``). When this is False the trainer skips step 6
+    (``_compute_ref_log_prob``) entirely — a batch-wide ref forward whose output nothing reads.
+
+    This is the *original* ``need_reference_policy`` definition. It is split out from
+    "does a ref module need to EXIST" because the contextdistillation M6 ref-anchor term keeps
+    the frozen ref resident for its own in-engine forward without using ``ref_log_prob`` at all.
+    """
+    return config.algorithm.get("use_kl_in_reward", False) or config.actor_rollout_ref.actor.use_kl_loss
+
+
 def need_reference_policy(
     config: DictConfig,
 ) -> bool:
-    """Given the config, do we need ref policy."""
-    return config.algorithm.get("use_kl_in_reward", False) or config.actor_rollout_ref.actor.use_kl_loss
+    """Given the config, does a reference-policy MODULE need to exist (be built)?
+
+    A superset of :func:`need_ppo_ref_log_prob`. The contextdistillation fork (M6) adds a third
+    reason to keep the frozen ref (θ₀) resident: the ref-anchor KL ``KL(π_θ(·|x,z) ‖ π_ref(·|x))``
+    runs its own forward through the colocated ref module inside ``TeacherStudentFSDPEngine``
+    (handled manually, NOT via ``apply_kl_penalty``). So the ref worker is forced on whenever
+    ``actor.kl_ref_grad_scale != 0`` even with both PPO ref-KL knobs off (resolves M6 checkpoint
+    #7) — but step 6 stays gated on ``need_ppo_ref_log_prob`` so no wasteful ref pass runs.
+    Default ``kl_ref_grad_scale=0.0`` ⇒ behaviour unchanged for non-teacher-student runs.
+    """
+    kl_ref_grad_scale = config.actor_rollout_ref.actor.get("kl_ref_grad_scale", 0.0)
+    return need_ppo_ref_log_prob(config) or kl_ref_grad_scale != 0.0
 
 
 def need_teacher_policy(

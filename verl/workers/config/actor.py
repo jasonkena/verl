@@ -182,6 +182,12 @@ class ActorConfig(BaseConfig):
     # + teacher_student_ppo_loss). Both 0.0 ⇒ KL gradient frozen (value still logged).
     kl_teacher_grad_scale: float = 1.0
     kl_student_grad_scale: float = 1.0
+    # M6 ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)): straight-through grad scale on the teacher
+    # (privileged) path, carrying the weight γ. The ref (θ₀) argument is a frozen detached
+    # constant, so its stopgrad half drops out and only the teacher-path term survives. Default
+    # 0.0 ⇒ term OFF: the engine skips the third (ref) forward and need_reference_policy stays
+    # driven by the PPO knobs. Non-zero ⇒ the ref worker is forced on and colocated.
+    kl_ref_grad_scale: float = 0.0
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

@@ -601,6 +601,31 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             self.actor.set_loss_fn(self.loss_fn)
             self.set_dispatch_collect(mesh_name="actor", **self.actor.get_dispatch_collect())
 
+            # contextdistillation fork (M6): the ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)) reuses the
+            # already-resident frozen ref (θ₀) module for a live third forward on the student
+            # sequence inside TeacherStudentFSDPEngine.forward_step — NO full-vocab logit transport
+            # through TransferQueue (which would be ~hundreds of GB at this batch/vocab). That only
+            # works if the ref is colocated in THIS worker (Role.ActorRolloutRef, not a separate
+            # ref worker group and not ref_in_actor/LoRA), so assert it and hand the actor engine a
+            # handle to the ref engine's module.
+            kl_ref_grad_scale = actor_config.get("kl_ref_grad_scale", 0.0)
+            if teacher_student_enabled and kl_ref_grad_scale != 0.0:
+                assert not self.config.actor.use_kl_loss, (
+                    "teacher_student M6: the ref-anchor KL is applied manually in "
+                    "TeacherStudentFSDPEngine; set actor.use_kl_loss=false so PPO's own loss-side "
+                    "ref-KL is not double-counted against the same reference."
+                )
+                assert self._is_ref, (
+                    "teacher_student M6 (kl_ref_grad_scale != 0) requires the ref policy colocated "
+                    "in the actor worker (role=actor_rollout_ref). Got role="
+                    f"{self.role!r}. The ref-anchor KL reuses self.ref's module live; a separate "
+                    "ref worker group is not reachable from the actor forward."
+                )
+                assert self.ref is not None, "teacher_student M6: ref worker not built despite role"
+                # The actor engine forwards the student sequence through this frozen module under
+                # no_grad to get π_ref(·|x); see TeacherStudentFSDPEngine.attach_ref_engine.
+                self.actor.engine.attach_ref_engine(self.ref.engine)
+
         # 3. build rollout engine
         if "rollout" in self.role:
             rollout_config: RolloutConfig = omega_conf_to_dataclass(self.config.rollout)

@@ -63,6 +63,7 @@ from verl.trainer.ppo.utils import (
     create_rl_dataset,
     create_rl_sampler,
     need_critic,
+    need_ppo_ref_log_prob,
     need_reference_policy,
     need_teacher_policy,
 )
@@ -109,6 +110,10 @@ class PPOTrainer(ABC):
         self.config = config
         self.use_critic = need_critic(self.config)
         self.use_reference_policy = need_reference_policy(self.config)
+        # Whether the PPO pipeline itself consumes ref_log_prob (reward-side / loss-side KL).
+        # Distinct from use_reference_policy: the contextdistillation M6 ref-anchor term keeps a
+        # ref module resident (use_reference_policy=True) without needing step 6's ref pass.
+        self.need_ppo_ref_log_prob = need_ppo_ref_log_prob(self.config)
         self.use_teacher_policy = need_teacher_policy(self.config)
         if self.config.algorithm.use_kl_in_reward:
             self.kl_ctrl_in_reward = core_algos.get_kl_controller(self.config.algorithm.kl_ctrl)
@@ -430,7 +435,10 @@ class PPOTrainer(ABC):
             batch = self._compute_old_log_prob(batch, metrics=metrics)
 
         # 6. [OPTIONAL] compute ref_log_prob
-        if self.use_reference_policy:
+        # Gated on need_ppo_ref_log_prob, NOT use_reference_policy: a ref module may be resident
+        # only for the contextdistillation M6 ref-anchor KL (its own in-engine forward), in which
+        # case nothing reads ref_log_prob and this batch-wide ref pass would be pure waste.
+        if self.need_ppo_ref_log_prob:
             with marked_timer("ref", timing_raw, color="olive"):
                 batch = self._compute_ref_log_prob(batch, metrics=metrics)
 
