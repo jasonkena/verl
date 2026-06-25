@@ -133,6 +133,19 @@ kl_ref_grad_scale: 0.0
 # kl_ref_grad_scale) — no separate coefficient. Default false => advantage untouched (M4/M6).
 use_global_kl_term: false
 
+# contextdistillation fork (M8): per-timestep baseline (variance reduction) for the M7 global term.
+# "none" => raw REINFORCE fold in the loss (M7). An estimator name (e.g. "rloo"/"grpo", mapped to the
+# vectorized variants) => subtract a per-(uid,t) leave-one-out / group-relative baseline computed at
+# the advantage stage (requires a forward-only KL precompute pass). Only used when use_global_kl_term=true.
+global_kl_baseline: none
+
+# contextdistillation fork (M8): per-GPU token budget for the forward-only KL precompute pass. null =>
+# ppo_max_token_len_per_gpu (the training budget). That pass is no_grad/no-activations but holds 2-3 full-vocab
+# logit tensors at once, so its safe ceiling is below the single-forward log-prob infer budget
+# (rollout.log_prob_max_token_len_per_gpu). Raise it to cut the precompute's micro-batch count. Only used when
+# global_kl_baseline != "none".
+global_kl_max_token_len_per_gpu: null
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 

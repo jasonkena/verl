@@ -196,6 +196,21 @@ class ActorConfig(BaseConfig):
     # (kl_teacher_grad_scale for the local KL, kl_ref_grad_scale for the ref KL) — no separate
     # coefficient. Default false ⇒ the advantage is untouched (byte-for-byte M4/M6).
     use_global_kl_term: bool = False
+    # M8: baseline (variance reduction) for the M7 global term. "none" ⇒ the raw REINFORCE fold in
+    # the loss (M7, no baseline). An estimator name ⇒ subtract a PER-TIMESTEP, leave-one-out /
+    # group-relative baseline across the n rollouts of a prompt, computed at the advantage stage by
+    # reshaping the future-cumulative KL G_t into per-(uid, t) pseudo-outcomes and reusing verl's
+    # registered advantage estimator verbatim (no hardcoded RLOO). "rloo"/"grpo" map to the
+    # vectorized variants (the dict variants loop over ~Σresp_len groups). Only consumed when
+    # use_global_kl_term=true. Requires a forward-only KL precompute pass (see TeacherStudentPPOTrainer).
+    global_kl_baseline: str = "none"
+    # M8: per-GPU token budget for that forward-only KL precompute pass. None ⇒ ppo_max_token_len_per_gpu
+    # (the training budget — safe). The pass is no_grad with no activations but holds 2–3 full-vocab logit
+    # tensors at once (teacher+student[+ref]), so its safe ceiling is BELOW the single-forward log-prob infer
+    # budget (rollout.log_prob_max_token_len_per_gpu, which holds one logit tensor) — roughly the training
+    # budget scaled up by the activation/grad memory the forward-only pass saves. Raise it to cut the number
+    # of micro-batches in the precompute. Only used when global_kl_baseline != "none".
+    global_kl_max_token_len_per_gpu: Optional[int] = None
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42
