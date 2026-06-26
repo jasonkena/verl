@@ -591,7 +591,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     distillation_ppo_loss, config=actor_config, distillation_config=distillation_config
                 )
             elif teacher_student_enabled:
-                from contextdistillation.verl_teacher_student.losses import teacher_student_ppo_loss
+                from contextdistillation.distillation.verl_teacher_student.losses import teacher_student_ppo_loss
 
                 self.loss_fn = partial(teacher_student_ppo_loss, config=actor_config)
             else:
