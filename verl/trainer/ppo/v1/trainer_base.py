@@ -180,7 +180,7 @@ class PPOTrainer(ABC):
             critic_cfg.engine.max_token_len_per_gpu = critic_cfg.ppo_infer_max_token_len_per_gpu
             worker_cfg = TrainingWorkerConfig(
                 model_type="value_model",
-                model_config=critic_cfg.model_config,
+                model_config=critic_cfg.model,
                 engine_config=critic_cfg.engine,
                 optimizer_config=critic_cfg.optim,
                 checkpoint_config=critic_cfg.checkpoint,
@@ -237,8 +237,10 @@ class PPOTrainer(ABC):
         if lora_rank <= 0:
             lora_rank = self.config.actor_rollout_ref.model.get("lora_rank", 0)
         self.ref_in_actor = lora_rank > 0 or self.config.actor_rollout_ref.model.get("lora_adapter_path") is not None
-        if self.use_reference_policy:
-            self.ref_policy_wg = all_wg[str(Role.ActorRolloutRef)]
+        if self.use_reference_policy and not self.ref_in_actor:
+            self.ref_policy_wg = all_wg[str(actor_role)]
+        if self.ref_in_actor:
+            self.ref_policy_wg = self.actor_rollout_wg
 
         # 7. initialize reward loop manager
         resource_pool = (
@@ -425,7 +427,7 @@ class PPOTrainer(ABC):
         # 3. [OPTIONAL] compute reward score with colocated reward model
         if self.reward_loop_manager.reward_loop_worker_handles is None:
             with marked_timer("reward", timing_raw, color="yellow"):
-                batch = self._compute_reward_colocate(batch)
+                batch = self._compute_reward_colocate(batch, metrics=metrics)
 
         # 4. balance batch across data parallel groups
         batch = self._balance_batch(batch, metrics=metrics)
@@ -1120,10 +1122,65 @@ class PPOTrainer(ABC):
         # add batch to agent loop manager
         self.agent_loop_manager.generate_sequences(batch)
 
-    def _compute_reward_colocate(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
-        """Compute the reward with colocate reward model."""
-        # TODO: add reward model
-        raise NotImplementedError
+    def _compute_reward_colocate(self, batch: KVBatchMeta, metrics: dict | None = None) -> KVBatchMeta:
+        """Compute the reward score with a colocated reward model."""
+        assert self.reward_loop_manager is not None, "RewardLoopManager is None"
+
+        # 1. read the fields required by the reward model from TransferQueue.
+        fields = ["prompts", "responses", "raw_prompt"]
+        data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
+
+        prompt_lengths = data["prompts"].offsets().diff()
+        response_lengths = data["responses"].offsets().diff()
+        prompts = data["prompts"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
+        responses = data["responses"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
+
+        # 2. rebuild the attention mask aligned with the [prompts | responses] layout.
+        prompt_mask = self._lengths_to_mask(prompt_lengths, prompts.size(1))
+        response_mask = self._lengths_to_mask(response_lengths, responses.size(1))
+        attention_mask = torch.cat([prompt_mask, response_mask], dim=1)
+
+        # `raw_prompt` is a non-tensor field; depending on the TransferQueue backend it
+        # comes back as a tensordict LinkedList (a `list` subclass), a NonTensorStack or a
+        # numpy array. `list(...)` normalizes all of them to a plain list where each element
+        # is one sample's chat-message list (whereas `.tolist()` only exists on numpy/tensors).
+        raw_prompts = list(data["raw_prompt"])
+        raw_prompt_arr = np.empty(len(raw_prompts), dtype=object)
+        raw_prompt_arr[:] = raw_prompts
+
+        rm_input = DataProto(
+            batch=TensorDict(
+                {"prompts": prompts, "responses": responses, "attention_mask": attention_mask},
+                batch_size=len(batch),
+            ),
+            non_tensor_batch={"raw_prompt": raw_prompt_arr},
+        )
+
+        # 3. run the reward model (wakes/sleeps the reward model internally).
+        rm_output = self.reward_loop_manager.compute_rm_score(rm_input)
+
+        # 4. write rm_scores (and reward extra info) back to TransferQueue.
+        padded_rm_scores = rm_output.batch["rm_scores"]
+        rm_scores = torch.nested.as_nested_tensor(
+            [padded_rm_scores[i, : response_lengths[i]] for i in range(len(batch))],
+            layout=torch.jagged,
+        )
+        write_back = {"rm_scores": rm_scores}
+        for key in rm_output.meta_info.get("reward_extra_keys", []):
+            write_back[key] = rm_output.non_tensor_batch[key]
+        tq.kv_batch_put(
+            keys=batch.keys,
+            partition_id=batch.partition_id,
+            fields=tu.get_tensordict(write_back),
+        )
+
+        return batch
+
+    @staticmethod
+    def _lengths_to_mask(lengths: torch.Tensor, width: int) -> torch.Tensor:
+        """Build a right-padded mask of shape (len(lengths), width) from per-row valid lengths."""
+        positions = torch.arange(width, device=lengths.device).unsqueeze(0)
+        return (positions < lengths.unsqueeze(1)).to(torch.int64)
 
     def _get_required_batch_multiple(self, dp_size: int) -> int:
         """Return the global batch multiple required by downstream train steps(e.g. critics, actors)."""
@@ -1260,6 +1317,12 @@ class PPOTrainer(ABC):
     def _compute_values(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
         """Compute the values of the batch."""
         # 1. compute value
+        batch.extra_info.update(
+            {
+                "compute_loss": False,
+                "temperature": self.config.actor_rollout_ref.rollout.temperature,
+            }
+        )
         output = self.critic_wg.infer_batch(batch)
         # TODO: DataProtoFuture support KVBatchMeta
         ray.get(output.futures)
@@ -1344,6 +1407,7 @@ class PPOTrainer(ABC):
             "epochs": self.config.critic.ppo_epochs,
             "seed": self.config.critic.data_loader_seed,
             "dataloader_kwargs": {"shuffle": self.config.critic.shuffle},
+            "temperature": self.config.actor_rollout_ref.rollout.temperature,
         }
         batch.extra_info.update(extra_info)
 

@@ -25,6 +25,10 @@ actor_rollout_ref:
       lr_wsd_decay_style: exponential
       lr_wsd_decay_steps: null
       use_checkpoint_opt_param_scheduler: false
+      use_precision_aware_optimizer: false
+      main_grads_dtype: fp32
+      exp_avg_dtype: fp32
+      exp_avg_sq_dtype: fp32
       override_optimizer_config: {}
     megatron:
       _target_: verl.workers.config.McoreEngineConfig
@@ -277,6 +281,8 @@ actor_rollout_ref:
     temperature: 1.0
     top_k: -1
     top_p: 1
+    full_determinism: false
+    seed: 42
     prompt_length: ${oc.select:data.max_prompt_length,512}
     response_length: ${oc.select:data.max_response_length,512}
     dtype: bfloat16
@@ -526,6 +532,10 @@ critic:
     lr_wsd_decay_style: exponential
     lr_wsd_decay_steps: null
     use_checkpoint_opt_param_scheduler: false
+    use_precision_aware_optimizer: false
+    main_grads_dtype: fp32
+    exp_avg_dtype: fp32
+    exp_avg_sq_dtype: fp32
     override_optimizer_config: {}
   megatron:
     _target_: verl.workers.config.McoreEngineConfig
@@ -777,6 +787,8 @@ reward:
       load_format: auto
       layered_summon: false
       scheduling_policy: fcfs
+      full_determinism: false
+      seed: 42
       multi_stage_wake_up: false
       engine_kwargs: {}
       limit_images: null
@@ -912,7 +924,7 @@ trainer:
   max_critic_ckpt_to_keep: null
   ray_wait_register_center_timeout: 300
   device: cuda
-  use_v1: false
+  use_v1: true
   v1:
     trainer_mode: sync
     sync: {}
