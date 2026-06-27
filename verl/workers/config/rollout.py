@@ -185,6 +185,12 @@ class RolloutConfig(BaseConfig):
     gpu_memory_utilization: float = 0.5
     ignore_eos: bool = False
     enforce_eager: bool = False
+    # vLLM engine executor backend for intra-engine (TP/PP) workers. "mp" (multiprocessing,
+    # vLLM default here) spawns local worker processes; under colocated Ray placement with
+    # TP>1 their rank->GPU mapping can be guessed wrong ("Guessing device ID based on global
+    # rank ... heterogeneous"), failing engine-core init. "ray" lets Ray place the TP workers
+    # via placement groups, which assigns devices correctly. Overridable on the CLI.
+    distributed_executor_backend: str = "mp"
     cudagraph_capture_sizes: Optional[list] = None
     free_cache_engine: bool = True
     data_parallel_size: int = 1

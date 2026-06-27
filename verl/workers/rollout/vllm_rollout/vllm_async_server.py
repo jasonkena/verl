@@ -268,7 +268,7 @@ class vLLMHttpServer:
             "dtype": self.config.dtype,
             "load_format": self.config.load_format,
             "skip_tokenizer_init": False,
-            "distributed_executor_backend": "mp",
+            "distributed_executor_backend": getattr(self.config, "distributed_executor_backend", "mp"),
             "worker_extension_cls": self._get_worker_extension_cls(),
             "trust_remote_code": self.model_config.trust_remote_code,
             "max_model_len": self.config.max_model_len,
