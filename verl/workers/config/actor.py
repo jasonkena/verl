@@ -182,6 +182,11 @@ class ActorConfig(BaseConfig):
     # + teacher_student_ppo_loss). Both 0.0 ⇒ KL gradient frozen (value still logged).
     kl_teacher_grad_scale: float = 1.0
     kl_student_grad_scale: float = 1.0
+    # Correctness-gate the local-KL STUDENT path: when true, the student-path gradient flows
+    # only for CORRECT rollouts (boxed acc=1, pre-overlong-penalty), per response. The trainer
+    # attaches a per-trajectory gate (from the agent-loop `correct` field) and the engine folds
+    # it into kl_student_grad_scale. false ⇒ uniform student scale (default behavior).
+    kl_student_gate_correct: bool = False
     # M6 ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)): straight-through grad scale on the teacher
     # (privileged) path, carrying the weight γ. The ref (θ₀) argument is a frozen detached
     # constant, so its stopgrad half drops out and only the teacher-path term survives. Default
