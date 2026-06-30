@@ -120,6 +120,10 @@ kl_teacher_grad_scale: 1.0
 
 kl_student_grad_scale: 1.0
 
+# contextdistillation fork: gate the local-KL STUDENT path on per-response boxed correctness
+# (only distill toward the student for correct rollouts). false => uniform student scale.
+kl_student_gate_correct: false
+
 # contextdistillation fork (M6): straight-through grad scale on the teacher (privileged) path
 # of the ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)), carrying the weight γ. The ref (θ₀) argument is
 # a frozen detached constant. Default 0.0 => term OFF (engine skips the ref forward). Non-zero
