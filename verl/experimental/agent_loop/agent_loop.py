@@ -136,6 +136,16 @@ class AgentLoopOutput(BaseModel):
             rm_scores[-1] = reward_score
             output["rm_scores"] = rm_scores
 
+        # correct: per-trajectory boxed-answer correctness (reward_extra_info["acc"]), promoted
+        # to a top-level (1,) tensor field so the teacher/student trainer can fetch it via TQ
+        # kv_batch_get (reward_extra_info itself stays a nested non-tensor passthrough). This is
+        # the PRE-penalty correctness (rm_scores adds the DAPO overlong penalty, so its sign is
+        # not a clean correctness signal) used to correctness-gate the local-KL student path.
+        reward_extra_info = output.get("extra_fields", {}).get("reward_extra_info", {})
+        acc = reward_extra_info.get("acc", None)
+        if acc is not None:
+            output["correct"] = torch.tensor([float(acc)], dtype=torch.float32)
+
         teacher_ids, teacher_logprobs = (
             output["extra_fields"].pop("teacher_ids", None),
             output["extra_fields"].pop("teacher_logprobs", None),
