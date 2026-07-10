@@ -187,6 +187,12 @@ class ActorConfig(BaseConfig):
     # attaches a per-trajectory gate (from the agent-loop `correct` field) and the engine folds
     # it into kl_student_grad_scale. false ⇒ uniform student scale (default behavior).
     kl_student_gate_correct: bool = False
+    # Hard-CE gate for the local-KL STUDENT path (issue #24): when true, the student-path
+    # gradient is the hard cross-entropy on the SAMPLED token −∇log π_s(y_t) instead of the
+    # full-vocab KL gradient −Σ_a π_t(a)·∇log π_s(a). The logged KL value and the teacher path
+    # stay full-vocab; only the student gradient changes. Composes with kl_student_gate_correct
+    # and kl_student_grad_scale. false ⇒ full-vocab student KL gradient (default behavior).
+    kl_student_gate_sampled: bool = False
     # M6 ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)): straight-through grad scale on the teacher
     # (privileged) path, carrying the weight γ. The ref (θ₀) argument is a frozen detached
     # constant, so its stopgrad half drops out and only the teacher-path term survives. Default

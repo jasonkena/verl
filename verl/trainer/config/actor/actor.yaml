@@ -124,6 +124,12 @@ kl_student_grad_scale: 1.0
 # (only distill toward the student for correct rollouts). false => uniform student scale.
 kl_student_gate_correct: false
 
+# contextdistillation fork (issue #24): hard-CE gate for the local-KL STUDENT path. When true,
+# the student-path gradient is the hard cross-entropy on the SAMPLED token −∇log π_s(y_t)
+# instead of the full-vocab KL gradient −Σ_a π_t(a)·∇log π_s(a). Logged KL value + teacher path
+# stay full-vocab; only the student gradient changes. false => full-vocab student KL gradient.
+kl_student_gate_sampled: false
+
 # contextdistillation fork (M6): straight-through grad scale on the teacher (privileged) path
 # of the ref-anchor KL(π_θ(·|x,z) ‖ π_ref(·|x)), carrying the weight γ. The ref (θ₀) argument is
 # a frozen detached constant. Default 0.0 => term OFF (engine skips the ref forward). Non-zero
