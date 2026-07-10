@@ -46,6 +46,12 @@ PPO_RAY_RUNTIME_ENV = {
         # TODO: disable compile cache due to cache corruption issue
         # https://github.com/vllm-project/vllm/issues/31199
         "VLLM_DISABLE_COMPILE_CACHE": "1",
+        # contextdistillation (issue #15): the my-method config colocates 3 forwards
+        # (teacher/student/ref) with param+optimizer offload at gpu_mem 0.7. On the base
+        # model this can stall vLLM's worker-execution RPC past the 300s default during the
+        # rollout<->train handoff -> "RPC call to sample_tokens timed out" -> EngineDeadError.
+        # Raise the executor RPC timeout so a slow handoff doesn't kill the engine.
+        "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "1200",
         # Needed for multi-processes colocated on same NPU device
         # https://www.hiascend.com/document/detail/zh/canncommercial/83RC1/maintenref/envvar/envref_07_0143.html
         "HCCL_HOST_SOCKET_PORT_RANGE": "auto",
