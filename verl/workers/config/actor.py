@@ -199,6 +199,14 @@ class ActorConfig(BaseConfig):
     # 0.0 ⇒ term OFF: the engine skips the third (ref) forward and need_reference_policy stays
     # driven by the PPO knobs. Non-zero ⇒ the ref worker is forced on and colocated.
     kl_ref_grad_scale: float = 0.0
+    # Which context (prompt) the frozen ref (θ₀) is fed for the ref-anchor KL (issue #24). The
+    # LHS is always the live teacher π_θ(·|x,z); this selects the RHS ref conditioning:
+    #   "student" (default): π_ref(·|x)   — ref sees the UNPRIVILEGED prompt (KL(teacher‖frozen student))
+    #   "teacher":           π_ref(·|x,z) — ref sees the PRIVILEGED prompt  (KL(teacher‖frozen teacher))
+    # The teacher variant anchors the live teacher to its OWN frozen init on the same privileged
+    # input (a trust-region on the privileged policy), rather than to the frozen unprivileged
+    # student. Only consumed when kl_ref_grad_scale != 0.
+    kl_ref_context: str = "student"
     # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
     # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
     # When true, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO

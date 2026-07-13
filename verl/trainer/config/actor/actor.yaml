@@ -136,6 +136,12 @@ kl_student_gate_sampled: false
 # => the colocated ref worker is forced on and reused for a live forward on the student sequence.
 kl_ref_grad_scale: 0.0
 
+# contextdistillation fork (issue #24): which context the frozen ref (θ₀) is fed for the ref-anchor
+# KL. "student" (default) => ref sees the unprivileged prompt π_ref(·|x) (KL(teacher‖frozen student));
+# "teacher" => ref sees the privileged prompt π_ref(·|x,z) (KL(teacher‖frozen teacher), a trust-region
+# anchor on the privileged policy). Only used when kl_ref_grad_scale != 0.
+kl_ref_context: student
+
 # contextdistillation fork (M7): enable the SECOND Tang–Munos term of ∇KL, the global
 # (score-function) term Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s. When true, the teacher_student
 # loss folds a per-token KL reward-to-go into the PPO advantage so verl's clipped-IS-ratio PG
