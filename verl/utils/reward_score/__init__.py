@@ -102,6 +102,16 @@ def default_compute_score(
         from . import search_r1_like_qa_em
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+    elif data_source == "sciknoweval":
+        # SDFT/asymrl science MCQ: <answer>-letter exact match (context-distillation port).
+        from . import sciknoweval
+
+        res = sciknoweval.compute_score(solution_str, ground_truth)
+    elif data_source == "tooluse":
+        # SDFT/asymrl ToolCalling: action-name multiset + Action_Input dict match.
+        from . import tooluse
+
+        res = tooluse.compute_score(solution_str, ground_truth)
 
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
