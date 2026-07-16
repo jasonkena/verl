@@ -142,6 +142,17 @@ kl_ref_grad_scale: 0.0
 # anchor on the privileged policy). Only used when kl_ref_grad_scale != 0.
 kl_ref_context: student
 
+# contextdistillation fork (issue #36): contrastive teacher. Fragment the privileged teacher into
+# a positive teacher (E[R] − KL(pos‖student)) and a negative teacher (E[−R] − KL(neg‖student)):
+# half of a prompt's n rollouts are generated from the neg_teacher_prompt and stamped
+# teacher_sign=−1; the trainer negates their reward, gives them a separate advantage baseline, and
+# the student KL gate becomes ±1. false => single-teacher behavior (byte-for-byte pre-#36).
+contrastive_teacher: false
+# Fraction of each prompt's n rollouts from the POSITIVE teacher (rest from the negative teacher).
+# 1.0 => pos-only; 0.5 => half/half. round(n·ratio) must split n evenly (asserted). Only used when
+# contrastive_teacher is true.
+contrastive_pos_ratio: 0.5
+
 # contextdistillation fork (M7 / issue #32): the SECOND Tang–Munos term of ∇KL, the global
 # (score-function) term Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s. When on, the teacher_student loss
 # folds a per-token KL reward-to-go into the PPO advantage so verl's clipped-IS-ratio PG produces

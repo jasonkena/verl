@@ -113,11 +113,22 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             if not trajectory["validate"] and not do_sample:
                 apply_greedy_sampling_params(run_sampling_params)
 
+            # Contrastive teacher (issue #36): route the first n_pos sessions to the POSITIVE
+            # teacher prompt (the rollout raw_prompt, already the teacher prompt) and the rest to
+            # the NEGATIVE teacher prompt, stamping a per-trajectory teacher_sign (+1 / −1) that
+            # the trainer reads to negate the reward and separate the advantage baseline. Only on
+            # TRAIN rollouts; validation always uses the (student) prompt untouched. Off ⇒ every
+            # session keeps the original prompt and teacher_sign=+1 (byte-for-byte pre-#36).
+            actor_cfg = self.config.actor_rollout_ref.actor
+            contrastive = (not trajectory["validate"]) and actor_cfg.get("contrastive_teacher", False)
+            n_pos = self._contrastive_n_pos(n, actor_cfg) if contrastive else n
+
             tasks = []
             for i in range(n):
+                session_prompt = self._session_prompt(prompt, session_id=i, n_pos=n_pos, contrastive=contrastive)
                 task = asyncio.create_task(
                     self._run_agent_loop(
-                        run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **prompt
+                        run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
                     )
                 )
                 tasks.append(task)
@@ -126,6 +137,49 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         except Exception as e:
             logger.exception(f"Error in _run_prompt: {e}")
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+
+    @staticmethod
+    def _contrastive_n_pos(n: int, actor_cfg) -> int:
+        """Number of POSITIVE-teacher sessions in a prompt's n rollouts (issue #36).
+
+        ``round(n · contrastive_pos_ratio)``, asserted to split n evenly into a positive
+        and a negative half (0 < n_pos < n unless the ratio is exactly 0 or 1) so both
+        teachers get a well-defined, baseline-able group. A ratio of 1.0 (pos-only) or 0.0
+        (neg-only) is allowed and skips the assert."""
+        ratio = float(actor_cfg.get("contrastive_pos_ratio", 0.5))
+        assert 0.0 <= ratio <= 1.0, f"contrastive_pos_ratio must be in [0,1], got {ratio}"
+        n_pos = int(round(n * ratio))
+        if 0.0 < ratio < 1.0:
+            assert abs(n * ratio - n_pos) < 1e-6 and 0 < n_pos < n, (
+                f"contrastive_pos_ratio={ratio} does not split rollout.n={n} into whole "
+                f"positive/negative halves (got n_pos={n * ratio}). Choose a ratio with "
+                f"round(n·ratio) == n·ratio and 0 < n_pos < n."
+            )
+        return n_pos
+
+    @staticmethod
+    def _session_prompt(prompt: dict, *, session_id: int, n_pos: int, contrastive: bool) -> dict:
+        """Per-session prompt for the contrastive split (issue #36).
+
+        Sessions ``[0, n_pos)`` are POSITIVE (keep the rollout ``raw_prompt``, which is already
+        the positive teacher prompt); sessions ``[n_pos, n)`` are NEGATIVE (swap ``raw_prompt``
+        for the passthrough ``neg_teacher_prompt`` column). Every session gets a ``teacher_sign``
+        (+1 / −1) the trainer reads. Returns a shallow copy so sessions don't share mutations; the
+        (unused-by-generation) ``neg_teacher_prompt`` column is dropped from the spawned kwargs.
+        With ``contrastive=False`` this is the identity apart from stamping ``teacher_sign=+1``."""
+        session_prompt = dict(prompt)
+        session_prompt.pop("neg_teacher_prompt", None)
+        if contrastive and session_id >= n_pos:
+            neg = prompt.get("neg_teacher_prompt")
+            assert neg is not None, (
+                "contrastive_teacher=true but the batch has no neg_teacher_prompt column — "
+                "rebuild the parquet with the #36 teacher_student_dataset builder."
+            )
+            session_prompt["raw_prompt"] = neg
+            session_prompt["teacher_sign"] = -1.0
+        else:
+            session_prompt["teacher_sign"] = 1.0
+        return session_prompt
 
     async def _agent_loop_postprocess(
         self, output: AgentLoopOutput | list[AgentLoopOutput], validate, **kwargs

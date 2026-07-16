@@ -207,6 +207,20 @@ class ActorConfig(BaseConfig):
     # input (a trust-region on the privileged policy), rather than to the frozen unprivileged
     # student. Only consumed when kl_ref_grad_scale != 0.
     kl_ref_context: str = "student"
+    # Contrastive teacher (issue #36): fragment the privileged teacher into a POSITIVE teacher
+    # (maximize E[R] − KL(pos‖student)) and a NEGATIVE teacher (maximize E[−R] − KL(neg‖student),
+    # i.e. plausible-but-incorrect rollouts kept close to the student). The two are identical
+    # except the negative teacher's reward is negated. When enabled, half (see
+    # contrastive_pos_ratio) of a prompt's n rollouts are generated from the neg_teacher_prompt
+    # and stamped teacher_sign=−1; the trainer negates their reward and gives them a separate
+    # advantage baseline, and the student KL gate becomes ±1 (correct⇒+1 distill toward,
+    # incorrect⇒−1 push away). false ⇒ single-teacher behavior (byte-for-byte pre-#36).
+    contrastive_teacher: bool = False
+    # Fraction of each prompt's n rollouts generated from the POSITIVE teacher; the rest use the
+    # NEGATIVE teacher. 1.0 ⇒ pos-only (== contrastive_teacher off for the rollout split). 0.5 ⇒
+    # the described half/half. round(n·ratio) must be an integer split of n (asserted). Only used
+    # when contrastive_teacher is true.
+    contrastive_pos_ratio: float = 0.5
     # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
     # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
     # When on, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO advantage
