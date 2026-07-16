@@ -209,26 +209,32 @@ class ActorConfig(BaseConfig):
     kl_ref_context: str = "student"
     # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
     # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
-    # When true, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO
-    # advantage before delegating to ppo_loss, so verl's clipped-IS-ratio PG produces it. The
-    # term is purely teacher-path, so it reuses each KL's teacher-path coefficient
-    # (kl_teacher_grad_scale for the local KL, kl_ref_grad_scale for the ref KL) — no separate
-    # coefficient. Default false ⇒ the advantage is untouched (byte-for-byte M4/M6).
-    use_global_kl_term: bool = False
-    # M8: baseline (variance reduction) for the M7 global term. "none" ⇒ the raw REINFORCE fold in
-    # the loss (M7, no baseline). An estimator name ⇒ subtract a PER-TIMESTEP, leave-one-out /
+    # When on, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO advantage
+    # before delegating to ppo_loss, so verl's clipped-IS-ratio PG produces it. The term is purely
+    # teacher-path, so it reuses each KL's teacher-path coefficient (kl_teacher_grad_scale for the
+    # local KL, kl_ref_grad_scale for the ref KL) — no separate coefficient.
+    #
+    # global_kl_term ∈ {null, "sum", "mean"} (issue #32):
+    #   null ⇒ global term OFF (advantage untouched — byte-for-byte M4/M6). DEFAULT.
+    #   "sum"  ⇒ G_t = Σ_{s>t} KL_s (the original global term).
+    #   "mean" ⇒ G_t = (Σ_{s>t} KL_s) / H, divided by this sequence's response length H — the mean
+    #            future KL contribution, removing the length bias of "sum". A per-sequence constant
+    #            scale, so it commutes with global_kl_baseline (the baseline sees the normalized G_t).
+    global_kl_term: Optional[str] = None
+    # M8: baseline (variance reduction) for the global term. null ⇒ the raw REINFORCE fold in the
+    # loss (M7, no baseline). An estimator name ⇒ subtract a PER-TIMESTEP, leave-one-out /
     # group-relative baseline across the n rollouts of a prompt, computed at the advantage stage by
     # reshaping the future-cumulative KL G_t into per-(uid, t) pseudo-outcomes and reusing verl's
     # registered advantage estimator verbatim (no hardcoded RLOO). "rloo"/"grpo" map to the
     # vectorized variants (the dict variants loop over ~Σresp_len groups). Only consumed when
-    # use_global_kl_term=true. Requires a forward-only KL precompute pass (see TeacherStudentPPOTrainer).
-    global_kl_baseline: str = "none"
+    # global_kl_term is set. Requires a forward-only KL precompute pass (see TeacherStudentPPOTrainer).
+    global_kl_baseline: Optional[str] = None
     # M8: per-GPU token budget for that forward-only KL precompute pass. None ⇒ ppo_max_token_len_per_gpu
     # (the training budget — safe). The pass is no_grad with no activations but holds 2–3 full-vocab logit
     # tensors at once (teacher+student[+ref]), so its safe ceiling is BELOW the single-forward log-prob infer
     # budget (rollout.log_prob_max_token_len_per_gpu, which holds one logit tensor) — roughly the training
     # budget scaled up by the activation/grad memory the forward-only pass saves. Raise it to cut the number
-    # of micro-batches in the precompute. Only used when global_kl_baseline != "none".
+    # of micro-batches in the precompute. Only used when global_kl_baseline is set.
     global_kl_max_token_len_per_gpu: Optional[int] = None
     ppo_epochs: int = 1
     shuffle: bool = False
