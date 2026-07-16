@@ -147,8 +147,12 @@ kl_ref_context: student
 # folds a per-token KL reward-to-go into the PPO advantage so verl's clipped-IS-ratio PG produces
 # it; it reuses each KL's teacher-path coefficient (kl_teacher_grad_scale / kl_ref_grad_scale) — no
 # separate coefficient. global_kl_term ∈ {null, "sum", "mean"}: null => OFF (advantage untouched,
-# M4/M6); "sum" => G_t = Σ_{s>t} KL_s; "mean" => G_t / H (divide by this sequence's response length
-# — mean future KL, removes the length bias of "sum"). Composes with global_kl_baseline.
+# M4/M6); "sum" => G_t = Σ_{s>t} KL_s; "mean" => each G_t divided by the NUMBER OF TERMS in its OWN
+# summation Σ_{s>t} (the count of future tokens H-1-t at position t) — i.e. the mean future-KL
+# contribution per remaining token, NOT G_t divided by a constant sequence length. The divisor
+# shrinks as t advances ([H-1,…,1,0]); this removes the length bias of "sum" (long responses
+# accumulate a larger G_t purely from more terms, driving the collapse to empty responses).
+# Composes with global_kl_baseline.
 global_kl_term: null
 
 # contextdistillation fork (M8): per-timestep baseline (variance reduction) for the global term.
