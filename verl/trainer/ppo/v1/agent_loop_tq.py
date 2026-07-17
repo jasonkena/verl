@@ -115,17 +115,21 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
 
             # Contrastive teacher (issue #36): route the first n_pos sessions to the POSITIVE
             # teacher prompt (the rollout raw_prompt, already the teacher prompt) and the rest to
-            # the NEGATIVE teacher prompt, stamping a per-trajectory teacher_sign (+1 / −1) that
-            # the trainer reads to negate the reward and separate the advantage baseline. Only on
-            # TRAIN rollouts; validation always uses the (student) prompt untouched. Off ⇒ every
-            # session keeps the original prompt and teacher_sign=+1 (byte-for-byte pre-#36).
+            # the NEGATIVE arm (contrastive_neg_source). Each session is stamped with a
+            # contrastive_arm tag ("pos"/"neg", for the separate advantage baseline) and a
+            # teacher_sign (+1 / −1, for reward negation). Only on TRAIN rollouts; validation always
+            # uses the (student) prompt untouched. Off ⇒ every session keeps the original prompt,
+            # arm="pos", teacher_sign=+1 (byte-for-byte pre-#36).
             actor_cfg = self.config.actor_rollout_ref.actor
             contrastive = (not trajectory["validate"]) and actor_cfg.get("contrastive_teacher", False)
             n_pos = self._contrastive_n_pos(n, actor_cfg) if contrastive else n
+            neg_source = str(actor_cfg.get("contrastive_neg_source", "student"))
 
             tasks = []
             for i in range(n):
-                session_prompt = self._session_prompt(prompt, session_id=i, n_pos=n_pos, contrastive=contrastive)
+                session_prompt = self._session_prompt(
+                    prompt, session_id=i, n_pos=n_pos, contrastive=contrastive, neg_source=neg_source
+                )
                 task = asyncio.create_task(
                     self._run_agent_loop(
                         run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
@@ -158,26 +162,50 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         return n_pos
 
     @staticmethod
-    def _session_prompt(prompt: dict, *, session_id: int, n_pos: int, contrastive: bool) -> dict:
+    def _session_prompt(prompt: dict, *, session_id: int, n_pos: int, contrastive: bool,
+                        neg_source: str = "student") -> dict:
         """Per-session prompt for the contrastive split (issue #36).
 
-        Sessions ``[0, n_pos)`` are POSITIVE (keep the rollout ``raw_prompt``, which is already
-        the positive teacher prompt); sessions ``[n_pos, n)`` are NEGATIVE (swap ``raw_prompt``
-        for the passthrough ``neg_teacher_prompt`` column). Every session gets a ``teacher_sign``
-        (+1 / −1) the trainer reads. Returns a shallow copy so sessions don't share mutations; the
-        (unused-by-generation) ``neg_teacher_prompt`` column is dropped from the spawned kwargs.
-        With ``contrastive=False`` this is the identity apart from stamping ``teacher_sign=+1``."""
+        Sessions ``[0, n_pos)`` are POSITIVE (keep the rollout ``raw_prompt``, the positive teacher
+        prompt): ``contrastive_arm="pos"``, ``teacher_sign=+1``. Sessions ``[n_pos, n)`` are the
+        NEGATIVE arm; what they sample and how their reward is treated depends on ``neg_source``:
+
+        - ``"neg_teacher"``: swap ``raw_prompt`` ← the ``neg_teacher_prompt`` passthrough column;
+          ``teacher_sign=−1`` (reward negated downstream — the neg teacher maximizes ``E[−R]``).
+          This is the original objective; it DIVERGES (unbounded ``KL(neg‖student)``).
+        - ``"student"`` (default): swap ``raw_prompt`` ← the ``student_prompt`` passthrough column;
+          ``teacher_sign=+1`` (reward NOT negated). The teacher and student forwards are then
+          identical, so the local KL is a no-op — the neg arm is just extra on-policy RLOO from the
+          student prompt (Jason's fix for the neg-teacher divergence).
+
+        Every session is tagged ``contrastive_arm`` ("pos"/"neg") so the trainer can baseline the
+        two arms separately regardless of ``teacher_sign``. Returns a shallow copy; the passthrough
+        prompt columns not used for generation are dropped from the spawned kwargs. With
+        ``contrastive=False`` this is the identity apart from arm="pos"/teacher_sign=+1."""
         session_prompt = dict(prompt)
-        session_prompt.pop("neg_teacher_prompt", None)
-        if contrastive and session_id >= n_pos:
-            neg = prompt.get("neg_teacher_prompt")
-            assert neg is not None, (
-                "contrastive_teacher=true but the batch has no neg_teacher_prompt column — "
-                "rebuild the parquet with the #36 teacher_student_dataset builder."
+        # These passthrough columns are only used to SELECT the neg-arm prompt; drop both from the
+        # kwargs the agent loop actually generates from (raw_prompt is what it tokenizes).
+        neg_teacher = session_prompt.pop("neg_teacher_prompt", None)
+        student = session_prompt.get("student_prompt")  # keep: the trainer still needs it (M3)
+        is_neg = contrastive and session_id >= n_pos
+        if is_neg and neg_source == "neg_teacher":
+            assert neg_teacher is not None, (
+                "contrastive_teacher=true, contrastive_neg_source=neg_teacher, but the batch has no "
+                "neg_teacher_prompt column — rebuild the parquet with the #36 dataset builder."
             )
-            session_prompt["raw_prompt"] = neg
+            session_prompt["raw_prompt"] = neg_teacher
+            session_prompt["contrastive_arm"] = "neg"
             session_prompt["teacher_sign"] = -1.0
+        elif is_neg:  # neg_source == "student"
+            assert student is not None, (
+                "contrastive_teacher=true, contrastive_neg_source=student, but the batch has no "
+                "student_prompt column — is data.custom_cls TeacherStudentDataset?"
+            )
+            session_prompt["raw_prompt"] = student
+            session_prompt["contrastive_arm"] = "neg"
+            session_prompt["teacher_sign"] = 1.0  # student-arm reward is NOT negated
         else:
+            session_prompt["contrastive_arm"] = "pos"
             session_prompt["teacher_sign"] = 1.0
         return session_prompt
 

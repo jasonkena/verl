@@ -148,10 +148,15 @@ kl_ref_context: student
 # teacher_sign=−1; the trainer negates their reward, gives them a separate advantage baseline, and
 # the student KL gate becomes ±1. false => single-teacher behavior (byte-for-byte pre-#36).
 contrastive_teacher: false
-# Fraction of each prompt's n rollouts from the POSITIVE teacher (rest from the negative teacher).
+# Fraction of each prompt's n rollouts from the POSITIVE teacher (rest from the negative arm).
 # 1.0 => pos-only; 0.5 => half/half. round(n·ratio) must split n evenly (asserted). Only used when
 # contrastive_teacher is true.
 contrastive_pos_ratio: 0.5
+# What the NEGATIVE arm samples from (issue #36): "neg_teacher" = neg_teacher_prompt (reward negated,
+# gate -1 — the original objective, but DIVERGES: unbounded KL(neg‖student)); "student" (default) =
+# the student prompt, so local KL(student‖student)=0 is a no-op (gate +1, reward NOT negated) — the
+# neg arm becomes extra on-policy RLOO from the student prompt. Jason's fix for the divergence.
+contrastive_neg_source: student
 
 # contextdistillation fork (M7 / issue #32): the SECOND Tang–Munos term of ∇KL, the global
 # (score-function) term Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s. When on, the teacher_student loss

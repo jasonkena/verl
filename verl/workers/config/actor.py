@@ -217,10 +217,21 @@ class ActorConfig(BaseConfig):
     # incorrect⇒−1 push away). false ⇒ single-teacher behavior (byte-for-byte pre-#36).
     contrastive_teacher: bool = False
     # Fraction of each prompt's n rollouts generated from the POSITIVE teacher; the rest use the
-    # NEGATIVE teacher. 1.0 ⇒ pos-only (== contrastive_teacher off for the rollout split). 0.5 ⇒
-    # the described half/half. round(n·ratio) must be an integer split of n (asserted). Only used
-    # when contrastive_teacher is true.
+    # NEGATIVE arm (contrastive_neg_source). 1.0 ⇒ pos-only (== contrastive_teacher off for the
+    # rollout split). 0.5 ⇒ the described half/half. round(n·ratio) must be an integer split of n
+    # (asserted). Only used when contrastive_teacher is true.
     contrastive_pos_ratio: float = 0.5
+    # What the NEGATIVE arm samples from (issue #36):
+    #   "neg_teacher" — the neg_teacher_prompt (privileged, plausible-but-wrong); reward is NEGATED
+    #     (the neg teacher maximizes E[−R]) and the student KL gate is −1 (push away). This is the
+    #     original contrastive objective — but it DIVERGES in practice: KL(neg‖student) is unbounded
+    #     above, so ascending it drives the student to diverge (grad_norm/kl blow up, resp_len→cap).
+    #   "student" (DEFAULT) — the STUDENT prompt. Then the teacher and student forwards are identical,
+    #     so the local KL(student‖student)=0 is a NO-OP (no repulsion, no divergence), the student
+    #     gate is +1 and reward is NOT negated: the neg arm is just extra on-policy RLOO from the
+    #     student prompt. Keeps the separate advantage baseline, so the student arm is baselined among
+    #     itself (≡ plain RLOO on the student prompt). Jason's fix for the neg-teacher divergence.
+    contrastive_neg_source: str = "student"
     # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
     # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
     # When on, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO advantage
