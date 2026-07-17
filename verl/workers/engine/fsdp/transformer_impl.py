@@ -639,8 +639,16 @@ class FSDPEngine(BaseEngine):
         # note that the global_batch_size should include data on all the dp
         tu.assign_non_tensor(data, sp_size=self.ulysses_sequence_parallel_size)
 
-        # compute num_tokens in global batch for loss normalization
-        batch_num_tokens = data["loss_mask"].sum().to(get_device_id())
+        # compute num_tokens in global batch for loss normalization.
+        # contextdistillation fork (#38): forward-only / log-prob passes assembled by the
+        # teacher_student trainer (old_log_prob, the M6 ref-anchor forward, the M8 KL precompute)
+        # can reach here with a micro-batch that carries ``response_mask`` but not ``loss_mask``
+        # (they only materialize the fields the pass needs). ``loss_mask`` is defined as a copy of
+        # ``response_mask`` at rollout time (agent_loop_tq.py: ``field["loss_mask"] =
+        # field["response_mask"]``), so fall back to it when absent — same value, no behavior change
+        # for paths that do carry loss_mask.
+        _norm_mask = data["loss_mask"] if "loss_mask" in data.keys() else data["response_mask"]
+        batch_num_tokens = _norm_mask.sum().to(get_device_id())
         torch.distributed.all_reduce(
             batch_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
         )
