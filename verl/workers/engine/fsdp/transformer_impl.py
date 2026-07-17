@@ -739,6 +739,51 @@ class FSDPEngine(BaseEngine):
         lr = self.lr_scheduler.get_last_lr()[0]  # only return the first group
         return lr
 
+    @torch.no_grad()
+    def ema_update_from(self, source_engine, alpha: float) -> None:
+        """EMA-update THIS engine's module (the reference) toward ``source_engine``'s module
+        (the actor): ``θ_ref ← alpha·θ_ref + (1−alpha)·θ_actor`` (issue #38, SDPO/SDFT).
+
+        Operates on **local shards**, which is correct precisely because the reference and actor
+        are built from the same base model at the same ``fsdp_size`` in the colocated
+        ``actor_rollout_ref`` worker, so their shards are element-aligned param-for-param. We take
+        each param's local shard (``DTensor.to_local()`` under FSDP2, ``.data`` otherwise), so the
+        blend is a cheap in-place elementwise op with no full-parameter gather.
+
+        Device-tolerant: the reference stays GPU-resident (``param_offload=false``, required for
+        the M6 live ref forward) while the actor may be offloaded to CPU by the end of its update,
+        so the actor shard is moved to the reference shard's device before the blend. ``alpha=1.0``
+        is a no-op (ref frozen); ``alpha=0.0`` copies the actor.
+        """
+        alpha = float(alpha)
+        if alpha >= 1.0:
+            return  # ref never moves — nothing to do (also the frozen-θ₀ default path)
+
+        def _local(p):
+            data = p.data
+            to_local = getattr(data, "to_local", None)
+            return to_local() if callable(to_local) else data
+
+        ref_params = dict(self.module.named_parameters())
+        src_params = dict(source_engine.module.named_parameters())
+        if ref_params.keys() != src_params.keys():
+            missing = set(ref_params) ^ set(src_params)
+            raise RuntimeError(
+                f"ema_update_from: reference and actor modules have mismatched parameter names "
+                f"(symmetric diff of {len(missing)}, e.g. {sorted(missing)[:3]}). The EMA blend "
+                f"requires identical module structure (same base model, same FSDP wrapping)."
+            )
+        for name, ref_p in ref_params.items():
+            ref_local = _local(ref_p)
+            src_local = _local(src_params[name])
+            if ref_local.shape != src_local.shape:
+                raise RuntimeError(
+                    f"ema_update_from: shard shape mismatch for {name!r} "
+                    f"(ref {tuple(ref_local.shape)} vs actor {tuple(src_local.shape)}); "
+                    f"reference and actor must share the same sharding."
+                )
+            ref_local.mul_(alpha).add_(src_local.to(ref_local.device), alpha=1.0 - alpha)
+
     def to(self, device: str, model: bool = True, optimizer: bool = True, grad: bool = True):
         """
         Move FSDP model and/or optimizer to CPU or GPU with offload support.

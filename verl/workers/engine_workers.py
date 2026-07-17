@@ -690,6 +690,18 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @_with_routing_replay_flag(enabled=True)
     def update_actor(self, data: TensorDict) -> TensorDict:
         output = self.actor.train_mini_batch(data=data)
+        # issue #38 (SDPO/SDFT): EMA the reference toward the actor after each actor update.
+        # θ_ref ← ema_alpha·θ_ref + (1−ema_alpha)·θ_actor, a cheap shard-local blend (the ref +
+        # actor are colocated in THIS worker with element-aligned FSDP shards). Only meaningful
+        # when the ref is actually consumed — the M6 ref-anchor KL (kl_ref_grad_scale != 0) — so
+        # gate on that too; otherwise EMAing a ref nothing reads is wasted work.
+        actor_cfg = self.config.actor
+        if (
+            actor_cfg.get("ema_ref", False)
+            and actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0
+            and self.ref is not None
+        ):
+            self.ref.engine.ema_update_from(self.actor.engine, actor_cfg.get("ema_alpha", 0.95))
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
