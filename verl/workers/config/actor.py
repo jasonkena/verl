@@ -209,15 +209,13 @@ class ActorConfig(BaseConfig):
     kl_ref_context: str = "student"
     # EMA reference model (issue #38, following SDPO / SDFT): instead of a frozen θ₀ ref, let the
     # reference SLOWLY TRACK the actor as an exponential moving average, updated after each actor
-    # step: θ_ref ← ema_alpha·θ_ref + (1−ema_alpha)·θ_actor (ema_alpha near 1 ⇒ slow drift). This
-    # equals SDPO's teacher_update_rate = 1 − ema_alpha (their default 0.05 ⇒ ema_alpha 0.95).
-    # false (default) ⇒ the ref stays the frozen θ₀ (byte-for-byte pre-#38). Only meaningful when
-    # the ref is actually consumed, i.e. kl_ref_grad_scale != 0 (the M6 ref-anchor KL); the blend
-    # is a cheap shard-local param update in the colocated actor_rollout_ref worker.
-    ema_ref: bool = False
-    # EMA decay for the reference model (issue #38). Only used when ema_ref is true. 1.0 ⇒ ref never
-    # moves (== frozen); 0.0 ⇒ ref copies the actor every step. Typical 0.9–0.999 (0.95 = SDPO default).
-    ema_alpha: float = 0.95
+    # step by the SDPO update-rate convention (Jason): θ_ref ← (1−ema_alpha)·θ_ref + ema_alpha·θ_actor.
+    # ema_alpha is the update RATE — LOW alpha ⇒ SLOWER drift (= SDPO teacher_update_rate). No
+    # separate on/off flag: ema_alpha=0.0 (DEFAULT) disables it (ref stays frozen θ₀, byte-for-byte
+    # pre-#38); 1.0 ⇒ ref copies the actor every step. Only meaningful when the ref is actually
+    # consumed, i.e. kl_ref_grad_scale != 0 (the M6 ref-anchor KL); the blend is a cheap shard-local
+    # param update in the colocated actor_rollout_ref worker.
+    ema_alpha: float = 0.0
     # M7 global (score-function) KL term: the SECOND Tang–Munos term of ∇KL,
     # Σ_t ∇logπ_θ(y_t|x,z,y_<t)·Σ_{s>t} KL_s (the per-step local KL is only the first term).
     # When on, teacher_student_ppo_loss folds a per-token KL reward-to-go into the PPO advantage

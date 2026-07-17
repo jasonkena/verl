@@ -742,7 +742,9 @@ class FSDPEngine(BaseEngine):
     @torch.no_grad()
     def ema_update_from(self, source_engine, alpha: float) -> None:
         """EMA-update THIS engine's module (the reference) toward ``source_engine``'s module
-        (the actor): ``θ_ref ← alpha·θ_ref + (1−alpha)·θ_actor`` (issue #38, SDPO/SDFT).
+        (the actor) by the SDPO update-rate convention (issue #38):
+        ``θ_ref ← (1−alpha)·θ_ref + alpha·θ_actor``. ``alpha`` is the update RATE — LOW alpha ⇒
+        SLOWER drift. ``alpha=0.0`` is a no-op (ref frozen); ``alpha=1.0`` copies the actor.
 
         Operates on **local shards**, which is correct precisely because the reference and actor
         are built from the same base model at the same ``fsdp_size`` in the colocated
@@ -752,11 +754,10 @@ class FSDPEngine(BaseEngine):
 
         Device-tolerant: the reference stays GPU-resident (``param_offload=false``, required for
         the M6 live ref forward) while the actor may be offloaded to CPU by the end of its update,
-        so the actor shard is moved to the reference shard's device before the blend. ``alpha=1.0``
-        is a no-op (ref frozen); ``alpha=0.0`` copies the actor.
+        so the actor shard is moved to the reference shard's device before the blend.
         """
         alpha = float(alpha)
-        if alpha >= 1.0:
+        if alpha <= 0.0:
             return  # ref never moves — nothing to do (also the frozen-θ₀ default path)
 
         def _local(p):
@@ -782,7 +783,8 @@ class FSDPEngine(BaseEngine):
                     f"(ref {tuple(ref_local.shape)} vs actor {tuple(src_local.shape)}); "
                     f"reference and actor must share the same sharding."
                 )
-            ref_local.mul_(alpha).add_(src_local.to(ref_local.device), alpha=1.0 - alpha)
+            # θ_ref ← (1−alpha)·θ_ref + alpha·θ_actor
+            ref_local.mul_(1.0 - alpha).add_(src_local.to(ref_local.device), alpha=alpha)
 
     def to(self, device: str, model: bool = True, optimizer: bool = True, grad: bool = True):
         """
