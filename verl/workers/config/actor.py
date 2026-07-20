@@ -245,6 +245,24 @@ class ActorConfig(BaseConfig):
     # budget scaled up by the activation/grad memory the forward-only pass saves. Raise it to cut the number
     # of micro-batches in the precompute. Only used when global_kl_baseline is set.
     global_kl_max_token_len_per_gpu: Optional[int] = None
+    # contextdistillation fork (AWR): ratio-free advantage-weighted regression on the privileged
+    # teacher rollouts, L = −w(A)·logπ with NO importance ratio (docs/FORMULATION.md §2). When true,
+    # teacher_student_ppo_loss folds the AWR weight w(A) into the PPO advantage (à la M7) before
+    # delegating to ppo_loss. The weight functions and trust-region gate live in
+    # contextdistillation/verl_teacher_student/awr.py. Default false ⇒ the advantage is untouched
+    # (byte-for-byte M4/M6/M7). Only consumed when model.model_type == "teacher_student_language_model".
+    advantage_weighted: bool = False
+    # AWR weight function (precedence: hard_filter > temperature > linear). awr_hard_filter ⇒
+    # best-of-N w(A) = 1[A ≥ 0] (bounded {0,1}, stable). Overrides awr_temperature. Only used when
+    # advantage_weighted=true.
+    awr_hard_filter: bool = False
+    # AWR soft-exponential temperature τ: w(A) = exp(clamp(A/τ, max=20)). 0.0 ⇒ linear w(A) = A.
+    # Ignored when awr_hard_filter=true. Only used when advantage_weighted=true.
+    awr_temperature: float = 0.0
+    # AWR trust region: multiply w(A) by the detached on-policy gate clamp(ρ, max=1),
+    # ρ = π_θ(y|x,z)/π_old(y|x,z) — down-weight privileged rollouts the clean student finds
+    # implausible (detached ⇒ no ratio gradient). Only used when advantage_weighted=true.
+    awr_trust_region: bool = False
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

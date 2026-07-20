@@ -175,6 +175,27 @@ global_kl_baseline: null
 # global_kl_baseline is set.
 global_kl_max_token_len_per_gpu: null
 
+# contextdistillation fork (AWR): ratio-free advantage-weighted regression on the privileged teacher
+# rollouts, L = -w(A)*logpi with NO importance ratio. When true, the teacher_student loss folds the AWR
+# weight w(A) into the PPO advantage (a la M7) before delegating to ppo_loss; the weight functions /
+# trust-region gate live in contextdistillation/verl_teacher_student/awr.py. Default false => advantage
+# untouched (M4/M6/M7). Only consumed when model.model_type == "teacher_student_language_model".
+advantage_weighted: false
+
+# contextdistillation fork (AWR): weight function selector (precedence hard_filter > temperature > linear).
+# true => best-of-N w(A) = 1[A >= 0] (bounded {0,1}, stable); overrides awr_temperature. Only used when
+# advantage_weighted=true.
+awr_hard_filter: false
+
+# contextdistillation fork (AWR): soft-exponential temperature tau, w(A) = exp(clamp(A/tau, max=20)).
+# 0.0 => linear w(A) = A. Ignored when awr_hard_filter=true. Only used when advantage_weighted=true.
+awr_temperature: 0.0
+
+# contextdistillation fork (AWR): multiply w(A) by the detached on-policy gate clamp(rho, max=1),
+# rho = pi_theta(y|x,z)/pi_old(y|x,z) — down-weight privileged rollouts the clean student finds implausible
+# (detached => no ratio gradient). Only used when advantage_weighted=true.
+awr_trust_region: false
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 
