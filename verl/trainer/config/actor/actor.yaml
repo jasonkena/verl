@@ -175,6 +175,14 @@ global_kl_baseline: null
 # global_kl_baseline is set.
 global_kl_max_token_len_per_gpu: null
 
+# contextdistillation fork (issue #41): per-token KL hinge threshold (nats) applied to the GLOBAL
+# (teacher policy-gradient / score-function) term ONLY. The reward-to-go becomes G_t = Σ_{s>t}
+# max(0, KL_s − kl_global_threshold), gating both the local (kl_teacher_grad_scale) and ref
+# (kl_ref_grad_scale) global folds — the direct local/ref KL losses stay RAW. 0.0 (default) => no
+# hinge, byte-for-byte pre-#41. Only has effect when global_kl_term is set (M7 loss-side fold or
+# M8 baselined trainer fold). Shared threshold across both global terms.
+kl_global_threshold: 0.0
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 
