@@ -103,7 +103,13 @@ def need_reference_policy(
     Default ``kl_ref_grad_scale=0.0`` ⇒ behaviour unchanged for non-teacher-student runs.
     """
     kl_ref_grad_scale = config.actor_rollout_ref.actor.get("kl_ref_grad_scale", 0.0)
-    return need_ppo_ref_log_prob(config) or kl_ref_grad_scale != 0.0
+    # AGRO (issue #43) also keeps the ref resident: it forwards the ref module live for lp_ref inside
+    # R_β, while kl_ref_grad_scale stays 0. Force the ref on for the AGRO model_type too.
+    agro_enabled = (
+        config.actor_rollout_ref.model.get("model_type", "language_model")
+        == "agro_teacher_student_language_model"
+    )
+    return need_ppo_ref_log_prob(config) or kl_ref_grad_scale != 0.0 or agro_enabled
 
 
 def need_teacher_policy(
