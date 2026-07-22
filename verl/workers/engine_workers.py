@@ -586,6 +586,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             teacher_student_enabled = (
                 actor_config.model_config.get("model_type", "language_model") == "teacher_student_language_model"
             )
+            # contextdistillation fork (AGRO, issue #43): a DIFFERENT model_type selecting the AGRO
+            # regression engine + two-path reinforce loss (per-token logprobs, no full-vocab KL).
+            agro_enabled = (
+                actor_config.model_config.get("model_type", "language_model")
+                == "agro_teacher_student_language_model"
+            )
             if self.distillation_enabled:
                 self.loss_fn = partial(
                     distillation_ppo_loss, config=actor_config, distillation_config=distillation_config
@@ -594,6 +600,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 from contextdistillation.distillation.verl_teacher_student.losses import teacher_student_ppo_loss
 
                 self.loss_fn = partial(teacher_student_ppo_loss, config=actor_config)
+            elif agro_enabled:
+                from contextdistillation.distillation.verl_teacher_student.agro_losses import (
+                    agro_teacher_student_loss,
+                )
+
+                self.loss_fn = partial(agro_teacher_student_loss, config=actor_config)
             else:
                 self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = self.actor_worker_cls(config=actor_training_config)
@@ -624,6 +636,18 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 assert self.ref is not None, "teacher_student M6: ref worker not built despite role"
                 # The actor engine forwards the student sequence through this frozen module under
                 # no_grad to get π_ref(·|x); see TeacherStudentFSDPEngine.attach_ref_engine.
+                self.actor.engine.attach_ref_engine(self.ref.engine)
+
+            # AGRO (issue #43): the ref enters only as the detached lp_ref inside R_β (kl_ref_grad_scale
+            # is asserted 0), but the forward-only AGRO log-prob pass still forwards the resident ref
+            # module live on the student context — so attach it whenever AGRO is enabled (gated on the
+            # model_type, NOT kl_ref_grad_scale). Requires the ref colocated (role=actor_rollout_ref).
+            if agro_enabled:
+                assert self._is_ref and self.ref is not None, (
+                    "AGRO (issue #43) requires the ref policy colocated in the actor worker "
+                    f"(role=actor_rollout_ref); got role={self.role!r}. The AGRO log-prob pass reuses "
+                    "self.ref's module live for π_ref(·|x). Set the ref worker on (need_reference_policy)."
+                )
                 self.actor.engine.attach_ref_engine(self.ref.engine)
 
         # 3. build rollout engine
@@ -693,15 +717,16 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # issue #38 (SDPO/SDFT): EMA the reference toward the actor after each actor update.
         # θ_ref ← (1−ema_ref)·θ_ref + ema_ref·θ_actor, a cheap shard-local blend (the ref +
         # actor are colocated in THIS worker with element-aligned FSDP shards). ema_ref=0 (default)
-        # disables it (frozen θ₀). Only meaningful when the ref is actually consumed — the M6
-        # ref-anchor KL (kl_ref_grad_scale != 0) — so gate on that too; else EMAing a ref nothing
-        # reads is wasted work.
+        # disables it (frozen θ₀). Only meaningful when the ref is actually consumed:
+        #   - M6 ref-anchor KL (kl_ref_grad_scale != 0), OR
+        #   - AGRO (issue #43), which consumes the ref as lp_ref inside R_β while kl_ref_grad_scale==0.
+        # Gate on either; else EMAing a ref nothing reads is wasted work.
         actor_cfg = self.config.actor
-        if (
-            actor_cfg.get("ema_ref", 0.0) > 0.0
-            and actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0
-            and self.ref is not None
-        ):
+        agro_enabled = (
+            actor_cfg.model_config.get("model_type", "language_model") == "agro_teacher_student_language_model"
+        )
+        ref_consumed = actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0 or agro_enabled
+        if actor_cfg.get("ema_ref", 0.0) > 0.0 and ref_consumed and self.ref is not None:
             self.ref.engine.ema_update_from(self.actor.engine, actor_cfg.get("ema_ref", 0.0))
         return output.cpu() if output is not None else None
 
