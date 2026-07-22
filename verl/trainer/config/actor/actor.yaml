@@ -183,6 +183,14 @@ global_kl_max_token_len_per_gpu: null
 # M8 baselined trainer fold). Shared threshold across both global terms.
 kl_global_threshold: 0.0
 
+# contextdistillation fork (AGRO, issue #43): fraction of each prompt's n TRAIN rollouts drawn from
+# the UNPRIVILEGED student prompt; the rest from the privileged teacher prompt. Realizes the mixture
+# sampler mu = sg(1/2 pi(.|x) + 1/2 pi(.|x,z)) (default 0.5). Endpoints allowed: 0.0 => all-teacher,
+# 1.0 => all-student. Interior ratios must split n into whole student/teacher halves (asserted). Only
+# the ROLLOUT SOURCE; the AGRO loss uses teacher/student/ref logprobs for every rollout regardless of
+# source (the source is a diagnostics-only tag). Only used by the AGRO engine + loss.
+student_rollout_ratio: 0.5
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 

@@ -253,6 +253,16 @@ class ActorConfig(BaseConfig):
     # terms. 0.0 (default) ⇒ raw KL_s (byte-for-byte pre-#41). Consumed only by the M7 loss-side
     # fold (_fold_global_kl_into_advantage) and the M8 trainer-side fold; the engine is unaware.
     kl_global_threshold: float = 0.0
+    # AGRO teacher/student regression (issue #43): fraction of each prompt's n TRAIN rollouts drawn
+    # from the UNPRIVILEGED student prompt π_θ(·|x); the rest are drawn from the privileged teacher
+    # prompt π_θ(·|x,z). This realizes the mixture sampler μ(·|x) = sg(½π_θ(·|x) + ½π_θ(·|x,z)) (the
+    # default 0.5). Endpoints are allowed: 0.0 ⇒ all-teacher rollouts, 1.0 ⇒ all-student rollouts.
+    # For an interior ratio, round(n·ratio) must split n into whole student/teacher halves (asserted).
+    # Only affects the ROLLOUT SAMPLING SOURCE (which prompt generates each response); the AGRO loss
+    # computes teacher/student/ref logprobs for EVERY rollout regardless of source, so this knob does
+    # not change the loss — the per-rollout source is a diagnostics-only tag. Only consumed when
+    # model.model_type == "agro_teacher_student_language_model" (selects the AGRO engine + loss).
+    student_rollout_ratio: float = 0.5
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

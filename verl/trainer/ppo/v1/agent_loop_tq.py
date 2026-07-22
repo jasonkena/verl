@@ -37,6 +37,13 @@ from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
+# AGRO teacher/student regression (issue #43): model_type selecting the AGRO engine+loss, and the
+# passthrough column carrying the unprivileged student prompt (mirrors the contextdistillation
+# TeacherStudentDataset STUDENT_PROMPT_KEY). Kept as literals here so this verl file has no import
+# dependency on the contextdistillation package (which is injected via model.external_lib).
+AGRO_MODEL_TYPE = "agro_teacher_student_language_model"
+AGRO_STUDENT_PROMPT_KEY = "student_prompt"
+
 
 def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["top_p"] = 1.0
@@ -113,11 +120,25 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             if not trajectory["validate"] and not do_sample:
                 apply_greedy_sampling_params(run_sampling_params)
 
+            # AGRO teacher/student mixture rollouts (issue #43): route the first n_student sessions to
+            # the UNPRIVILEGED student prompt π_θ(·|x) and the rest to the (privileged) teacher prompt
+            # π_θ(·|x,z) — the mixture sampler μ = sg(½π_θ(·|x) + ½π_θ(·|x,z)). Each session is stamped a
+            # rollout_source (1.0 student / 0.0 teacher) that rides through into the stored trajectory
+            # for diagnostics; the AGRO loss uses teacher/student/ref logprobs for EVERY rollout
+            # regardless of source, so the source does NOT change the loss. Only on TRAIN rollouts;
+            # validation always uses the (student) prompt untouched. Off (non-AGRO model_type) ⇒ every
+            # session keeps the original prompt and rollout_source=0.0 (byte-for-byte pre-#43).
+            actor_cfg = self.config.actor_rollout_ref.actor
+            model_type = self.config.actor_rollout_ref.model.get("model_type", "language_model")
+            agro = (not trajectory["validate"]) and model_type == AGRO_MODEL_TYPE
+            n_student = self._agro_n_student(n, actor_cfg) if agro else 0
+
             tasks = []
             for i in range(n):
+                session_prompt = self._agro_session_prompt(prompt, session_id=i, n_student=n_student, agro=agro)
                 task = asyncio.create_task(
                     self._run_agent_loop(
-                        run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **prompt
+                        run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
                     )
                 )
                 tasks.append(task)
@@ -126,6 +147,49 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         except Exception as e:
             logger.exception(f"Error in _run_prompt: {e}")
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+
+    @staticmethod
+    def _agro_n_student(n: int, actor_cfg) -> int:
+        """Number of STUDENT-prompt sessions in a prompt's n rollouts (AGRO, issue #43).
+
+        ``round(n · student_rollout_ratio)``, asserted to split n into whole student/teacher halves
+        for an interior ratio (0 < ratio < 1). Endpoints are allowed and skip the assert: ratio 0.0
+        ⇒ 0 student (all-teacher), 1.0 ⇒ n student (all-student)."""
+        ratio = float(actor_cfg.get("student_rollout_ratio", 0.5))
+        assert 0.0 <= ratio <= 1.0, f"student_rollout_ratio must be in [0,1], got {ratio}"
+        n_student = int(round(n * ratio))
+        if 0.0 < ratio < 1.0:
+            assert abs(n * ratio - n_student) < 1e-6 and 0 < n_student < n, (
+                f"student_rollout_ratio={ratio} does not split rollout.n={n} into whole "
+                f"student/teacher halves (got n_student={n * ratio}). Choose a ratio with "
+                f"round(n·ratio) == n·ratio and 0 < n_student < n."
+            )
+        return n_student
+
+    @staticmethod
+    def _agro_session_prompt(prompt: dict, *, session_id: int, n_student: int, agro: bool) -> dict:
+        """Per-session prompt for the AGRO teacher/student mixture split (issue #43).
+
+        Sessions ``[0, n_student)`` are STUDENT (swap ``raw_prompt`` for the passthrough
+        ``student_prompt`` column, the unprivileged prompt); sessions ``[n_student, n)`` are TEACHER
+        (keep the rollout ``raw_prompt``, which TeacherStudentDataset forced to the privileged teacher
+        prompt). Every session gets a ``rollout_source`` (1.0 student / 0.0 teacher) the trainer stores
+        for diagnostics. Returns a shallow copy so sessions don't share mutations; the
+        (unused-by-generation) ``student_prompt`` column is dropped from the spawned kwargs. With
+        ``agro=False`` this is the identity apart from stamping ``rollout_source=0.0``."""
+        session_prompt = dict(prompt)
+        session_prompt.pop(AGRO_STUDENT_PROMPT_KEY, None)
+        if agro and session_id < n_student:
+            student = prompt.get(AGRO_STUDENT_PROMPT_KEY)
+            assert student is not None, (
+                "student_rollout_ratio implies student rollouts but the batch has no student_prompt "
+                "column — is data.custom_cls pointing at TeacherStudentDataset?"
+            )
+            session_prompt["raw_prompt"] = student
+            session_prompt["rollout_source"] = 1.0
+        else:
+            session_prompt["rollout_source"] = 0.0
+        return session_prompt
 
     async def _agent_loop_postprocess(
         self, output: AgentLoopOutput | list[AgentLoopOutput], validate, **kwargs
