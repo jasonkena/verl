@@ -245,6 +245,14 @@ class ActorConfig(BaseConfig):
     # budget scaled up by the activation/grad memory the forward-only pass saves. Raise it to cut the number
     # of micro-batches in the precompute. Only used when global_kl_baseline is set.
     global_kl_max_token_len_per_gpu: Optional[int] = None
+    # issue #41: per-step KL hinge threshold `const` (nats) for the GLOBAL (teacher policy-gradient)
+    # term ONLY. When > 0, the reward-to-go becomes G_t = Σ_{s>t} max(0, KL_s − const) for BOTH the
+    # local-KL global term and the ref-anchor global term — a per-step deadband that ignores steps
+    # already below `const` nats of divergence. The DIRECT local-KL loss (TERM 1) and DIRECT M6
+    # ref-anchor loss are UNAFFECTED (they use the raw KL). Raw nats, shared across both global
+    # terms. 0.0 (default) ⇒ raw KL_s (byte-for-byte pre-#41). Consumed only by the M7 loss-side
+    # fold (_fold_global_kl_into_advantage) and the M8 trainer-side fold; the engine is unaware.
+    kl_global_threshold: float = 0.0
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42
