@@ -126,8 +126,8 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             # rollout_source (1.0 student / 0.0 teacher) that rides through into the stored trajectory
             # for diagnostics; the AGRO loss uses teacher/student/ref logprobs for EVERY rollout
             # regardless of source, so the source does NOT change the loss. Only on TRAIN rollouts;
-            # validation always uses the (student) prompt untouched. Off (non-AGRO model_type) ⇒ every
-            # session keeps the original prompt and rollout_source=0.0 (byte-for-byte pre-#43).
+            # validation always uses the (student) prompt untouched. Off (non-AGRO model_type) ⇒
+            # _agro_session_prompt returns the prompt untouched (byte-for-byte pre-#43).
             actor_cfg = self.config.actor_rollout_ref.actor
             model_type = self.config.actor_rollout_ref.model.get("model_type", "language_model")
             agro = (not trajectory["validate"]) and model_type == AGRO_MODEL_TYPE
@@ -173,13 +173,22 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         Sessions ``[0, n_student)`` are STUDENT (swap ``raw_prompt`` for the passthrough
         ``student_prompt`` column, the unprivileged prompt); sessions ``[n_student, n)`` are TEACHER
         (keep the rollout ``raw_prompt``, which TeacherStudentDataset forced to the privileged teacher
-        prompt). Every session gets a ``rollout_source`` (1.0 student / 0.0 teacher) the trainer stores
-        for diagnostics. Returns a shallow copy so sessions don't share mutations; the
-        (unused-by-generation) ``student_prompt`` column is dropped from the spawned kwargs. With
-        ``agro=False`` this is the identity apart from stamping ``rollout_source=0.0``."""
+        prompt). Every AGRO session gets a ``rollout_source`` (1.0 student / 0.0 teacher) stored for
+        diagnostics.
+
+        CRITICAL: the ``student_prompt`` passthrough column is kept in the spawned kwargs (NOT popped)
+        so it commits to TransferQueue — ``_add_agro_context`` reads it back to build the student
+        context sequence. It's the same per-sample dataset column on every session (both student and
+        teacher rollouts carry it), so the AGRO advantage stage can rebuild BOTH contexts regardless of
+        which prompt actually generated the response. ``run()`` tolerates the extra kwarg (the base M4
+        path carries ``student_prompt`` through identically).
+
+        With ``agro=False`` this is the IDENTITY (returns ``prompt`` untouched — no copy, no
+        ``rollout_source`` stamp), so non-AGRO runs are byte-for-byte pre-#43."""
+        if not agro:
+            return prompt
         session_prompt = dict(prompt)
-        session_prompt.pop(AGRO_STUDENT_PROMPT_KEY, None)
-        if agro and session_id < n_student:
+        if session_id < n_student:
             student = prompt.get(AGRO_STUDENT_PROMPT_KEY)
             assert student is not None, (
                 "student_rollout_ratio implies student rollouts but the batch has no student_prompt "
