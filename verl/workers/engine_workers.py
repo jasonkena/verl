@@ -722,8 +722,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         #   - AGRO (issue #43), which consumes the ref as lp_ref inside R_β while kl_ref_grad_scale==0.
         # Gate on either; else EMAing a ref nothing reads is wasted work.
         actor_cfg = self.config.actor
+        # model_type lives on the worker's raw model config block (sibling of actor), NOT on
+        # actor_cfg — actor_cfg.model_config only exists on the dataclass built at setup time.
         agro_enabled = (
-            actor_cfg.model_config.get("model_type", "language_model") == "agro_teacher_student_language_model"
+            self.config.model.get("model_type", "language_model") == "agro_teacher_student_language_model"
         )
         ref_consumed = actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0 or agro_enabled
         if actor_cfg.get("ema_ref", 0.0) > 0.0 and ref_consumed and self.ref is not None:
