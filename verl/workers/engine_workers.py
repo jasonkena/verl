@@ -592,6 +592,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 actor_config.model_config.get("model_type", "language_model")
                 == "agro_teacher_student_language_model"
             )
+            # contextdistillation fork (off-policy GRPO, issue #48): reuses the SAME AGRO engine
+            # (identical per-token student/teacher/ref forwards) under a distinct model_type, but with
+            # the off-policy-GRPO two-path clipped-IS-PG loss (IS from the mixture μ) instead.
+            offpolicy_grpo_enabled = (
+                actor_config.model_config.get("model_type", "language_model") == "offpolicy_grpo_language_model"
+            )
             if self.distillation_enabled:
                 self.loss_fn = partial(
                     distillation_ppo_loss, config=actor_config, distillation_config=distillation_config
@@ -606,6 +612,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 )
 
                 self.loss_fn = partial(agro_teacher_student_loss, config=actor_config)
+            elif offpolicy_grpo_enabled:
+                from contextdistillation.distillation.verl_teacher_student.offpolicy_grpo_losses import (
+                    offpolicy_grpo_loss,
+                )
+
+                self.loss_fn = partial(offpolicy_grpo_loss, config=actor_config)
             else:
                 self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = self.actor_worker_cls(config=actor_training_config)
@@ -642,11 +654,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # is asserted 0), but the forward-only AGRO log-prob pass still forwards the resident ref
             # module live on the student context — so attach it whenever AGRO is enabled (gated on the
             # model_type, NOT kl_ref_grad_scale). Requires the ref colocated (role=actor_rollout_ref).
-            if agro_enabled:
+            # off-policy GRPO (issue #48) shares the AGRO engine + forward-only ref log-prob pass, so it
+            # needs the colocated ref attached identically.
+            if agro_enabled or offpolicy_grpo_enabled:
                 assert self._is_ref and self.ref is not None, (
-                    "AGRO (issue #43) requires the ref policy colocated in the actor worker "
-                    f"(role=actor_rollout_ref); got role={self.role!r}. The AGRO log-prob pass reuses "
-                    "self.ref's module live for π_ref(·|x). Set the ref worker on (need_reference_policy)."
+                    "AGRO (issue #43) / off-policy GRPO (issue #48) require the ref policy colocated in "
+                    f"the actor worker (role=actor_rollout_ref); got role={self.role!r}. The forward-only "
+                    "log-prob pass reuses self.ref's module live for π_ref(·|x). Set the ref worker on "
+                    "(need_reference_policy)."
                 )
                 self.actor.engine.attach_ref_engine(self.ref.engine)
 
@@ -727,7 +742,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         agro_enabled = (
             self.config.model.get("model_type", "language_model") == "agro_teacher_student_language_model"
         )
-        ref_consumed = actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0 or agro_enabled
+        # off-policy GRPO (issue #48) also consumes the ref as lp_ref inside R_β (kl_ref_grad_scale==0),
+        # so an EMA ref is equally meaningful for it.
+        offpolicy_grpo_enabled = (
+            self.config.model.get("model_type", "language_model") == "offpolicy_grpo_language_model"
+        )
+        ref_consumed = actor_cfg.get("kl_ref_grad_scale", 0.0) != 0.0 or agro_enabled or offpolicy_grpo_enabled
         if actor_cfg.get("ema_ref", 0.0) > 0.0 and ref_consumed and self.ref is not None:
             self.ref.engine.ema_update_from(self.actor.engine, actor_cfg.get("ema_ref", 0.0))
         return output.cpu() if output is not None else None

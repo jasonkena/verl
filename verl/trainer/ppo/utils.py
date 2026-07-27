@@ -105,10 +105,10 @@ def need_reference_policy(
     kl_ref_grad_scale = config.actor_rollout_ref.actor.get("kl_ref_grad_scale", 0.0)
     # AGRO (issue #43) also keeps the ref resident: it forwards the ref module live for lp_ref inside
     # R_β, while kl_ref_grad_scale stays 0. Force the ref on for the AGRO model_type too.
-    agro_enabled = (
-        config.actor_rollout_ref.model.get("model_type", "language_model")
-        == "agro_teacher_student_language_model"
-    )
+    # Off-policy GRPO (issue #48) reuses the same forward-only ref log-prob pass (lp_ref inside R_β),
+    # so it needs the ref module resident identically.
+    model_type = config.actor_rollout_ref.model.get("model_type", "language_model")
+    agro_enabled = model_type in ("agro_teacher_student_language_model", "offpolicy_grpo_language_model")
     return need_ppo_ref_log_prob(config) or kl_ref_grad_scale != 0.0 or agro_enabled
 
 

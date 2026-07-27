@@ -42,6 +42,11 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 # TeacherStudentDataset STUDENT_PROMPT_KEY). Kept as literals here so this verl file has no import
 # dependency on the contextdistillation package (which is injected via model.external_lib).
 AGRO_MODEL_TYPE = "agro_teacher_student_language_model"
+# Off-policy GRPO (issue #48) reuses the SAME teacher/student mixture rollouts as AGRO (student_rollout_ratio
+# split + rollout_source stamp); it just selects a different engine/loss downstream. So the mixture gate
+# fires for both model_types.
+OFFPOLICY_GRPO_MODEL_TYPE = "offpolicy_grpo_language_model"
+_MIXTURE_MODEL_TYPES = (AGRO_MODEL_TYPE, OFFPOLICY_GRPO_MODEL_TYPE)
 AGRO_STUDENT_PROMPT_KEY = "student_prompt"
 
 
@@ -130,7 +135,7 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             # _agro_session_prompt returns the prompt untouched (byte-for-byte pre-#43).
             actor_cfg = self.config.actor_rollout_ref.actor
             model_type = self.config.actor_rollout_ref.model.get("model_type", "language_model")
-            agro = (not trajectory["validate"]) and model_type == AGRO_MODEL_TYPE
+            agro = (not trajectory["validate"]) and model_type in _MIXTURE_MODEL_TYPES
             n_student = self._agro_n_student(n, actor_cfg) if agro else 0
 
             tasks = []
