@@ -191,6 +191,16 @@ kl_global_threshold: 0.0
 # source (the source is a diagnostics-only tag). Only used by the AGRO engine + loss.
 student_rollout_ratio: 0.5
 
+# contextdistillation fork (off-policy GRPO length-collapse debug, issue #48): how the per-sequence
+# KL-to-ref term inside R_beta = scores - beta*KL is aggregated over response tokens before the
+# source-split baseline. NAMED knob (extensible; Jason 2026-07-28), mirroring global_kl_term:
+#   "sum"  (default) => R_beta = sum_t scores_t - beta * sum_t (lp_ctx_t - lp_ref_t) (pre-#48).
+#   "mean"           => the KL term is divided by |y| (response length): only the KL term is
+#                      length-normalized, the outcome reward sum_t scores_t is untouched. Removes the
+#                      length-scaling of the KL penalty (suspected driver of bare-\boxed{} collapse).
+# Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
+kl_reward_norm: sum
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 

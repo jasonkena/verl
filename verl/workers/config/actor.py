@@ -263,6 +263,17 @@ class ActorConfig(BaseConfig):
     # not change the loss — the per-rollout source is a diagnostics-only tag. Only consumed when
     # model.model_type == "agro_teacher_student_language_model" (selects the AGRO engine + loss).
     student_rollout_ratio: float = 0.5
+    # issue #48 (off-policy GRPO length-collapse debug): how the per-sequence KL-to-ref term inside
+    # R_β = scores − β·KL is aggregated over the response tokens before the source-split baseline.
+    # A NAMED knob (extensible; Jason 2026-07-28) rather than a bool, mirroring global_kl_term:
+    #   "sum"  (DEFAULT) ⇒ R_β = Σ_t scores_t − β·Σ_t (lp_ctx_t − lp_ref_t)  — byte-for-byte pre-#48.
+    #   "mean"           ⇒ the KL term is divided by this sequence's response length |y|:
+    #                      R_β = Σ_t scores_t − β·(1/|y|)·Σ_t (lp_ctx_t − lp_ref_t). Only the KL term
+    #                      is length-normalized (the outcome reward Σ_t scores_t is untouched), so the
+    #                      per-token KL penalty no longer scales with response length — the suspected
+    #                      driver of the bare-\boxed{} length collapse. Only consumed by the off-policy
+    #                      GRPO trainer (model_type == "offpolicy_grpo_language_model").
+    kl_reward_norm: str = "sum"
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42
