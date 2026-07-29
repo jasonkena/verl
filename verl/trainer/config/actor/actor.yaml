@@ -191,6 +191,18 @@ kl_global_threshold: 0.0
 # source (the source is a diagnostics-only tag). Only used by the AGRO engine + loss.
 student_rollout_ratio: 0.5
 
+# contextdistillation fork (AGRO, issue #43 2026-07-29): DECOUPLE the outer REINFORCE PG prefactor
+# from the beta that shapes R_beta. In the base AGRO loss beta plays BOTH roles
+# (kl_student_grad_scale / kl_teacher_grad_scale enters inside R_beta AND multiplies the whole
+# reinforce term). These knobs override ONLY the outer prefactor per path; beta still enters R_beta
+# through kl_*_grad_scale unchanged. null (default) => prefactor = the path's kl_*_grad_scale
+# (byte-for-byte legacy). e.g. agro_student_pg_prescale=1.0 runs the student PG un-downscaled while
+# beta=kl_student_grad_scale still shapes its reward; agro_teacher_pg_prescale=0.0 drops the teacher
+# PG term (teacher not optimized) while keeping beta_t inside R_beta. AGRO loss only.
+agro_student_pg_prescale: null
+
+agro_teacher_pg_prescale: null
+
 # contextdistillation fork (off-policy GRPO length-collapse debug, issue #48): how the per-sequence
 # KL-to-ref term inside R_beta = scores - beta*KL is aggregated over response tokens before the
 # source-split baseline. NAMED knob (extensible; Jason 2026-07-28), mirroring global_kl_term:

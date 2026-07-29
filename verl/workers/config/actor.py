@@ -263,6 +263,17 @@ class ActorConfig(BaseConfig):
     # not change the loss — the per-rollout source is a diagnostics-only tag. Only consumed when
     # model.model_type == "agro_teacher_student_language_model" (selects the AGRO engine + loss).
     student_rollout_ratio: float = 0.5
+    # AGRO (issue #43, 2026-07-29): DECOUPLE the outer REINFORCE PG prefactor from the β that shapes
+    # R_β. In the base AGRO loss β plays BOTH roles (kl_{student,teacher}_grad_scale enters inside
+    # R_β = r − β·(lpπ − lpπ_ref) AND multiplies the whole reinforce term: L = β_s·reinforce_s +
+    # β_t·reinforce_t). These knobs override ONLY the outer prefactor per path; β still enters R_β
+    # through kl_{student,teacher}_grad_scale unchanged. null (default) ⇒ prefactor = the path's
+    # kl_*_grad_scale (byte-for-byte legacy). Set agro_student_pg_prescale=1.0 to run the student
+    # PG un-downscaled while β=kl_student_grad_scale still shapes its reward; set
+    # agro_teacher_pg_prescale=0.0 to DROP the teacher PG term (teacher not optimized) while keeping
+    # β_t inside R_β. Only consumed by the AGRO loss (model_type == agro_teacher_student_language_model).
+    agro_student_pg_prescale: Optional[float] = None
+    agro_teacher_pg_prescale: Optional[float] = None
     # issue #48 (off-policy GRPO length-collapse debug): how the per-sequence KL-to-ref term inside
     # R_β = scores − β·KL is aggregated over the response tokens before the source-split baseline.
     # A NAMED knob (extensible; Jason 2026-07-28) rather than a bool, mirroring global_kl_term:
