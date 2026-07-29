@@ -274,6 +274,20 @@ class ActorConfig(BaseConfig):
     #                      driver of the bare-\boxed{} length collapse. Only consumed by the off-policy
     #                      GRPO trainer (model_type == "offpolicy_grpo_language_model").
     kl_reward_norm: str = "sum"
+    # issue #48 (off-policy IS-ratio rework): how the per-token importance-sampling ratio ρ =
+    # π_ctx(θ)/π_behavior_old is bounded before it multiplies the (detached) advantage. π_behavior is
+    # the policy that actually SAMPLED the rollout (student-context for student-sourced rollouts,
+    # teacher-context for teacher-sourced), so a source-MATCHED path is on-policy (ρ≡1) and only the
+    # cross path carries an IS correction. The clip band is [1−clip_ratio_low, 1+clip_ratio_high]
+    # (inherited from the standard PPO knobs). A NAMED knob (extensible) rather than a bool:
+    #   "clip"     (DEFAULT) ⇒ standard PPO pessimistic surrogate max(−ρ·A, −clip(ρ,band)·A) via
+    #                          compute_policy_loss_vanilla — out-of-band tokens get zero gradient only
+    #                          on the pessimistic side; in-band unclipped.
+    #   "zero_adv" ⇒ zero the advantage (⇒ zero gradient, "gradients not perturbed") for any token
+    #                whose ρ falls OUTSIDE the band (both directions); in-band tokens get the raw ρ·A
+    #                score (no pessimistic max). Keeps the surrogate unbiased on the retained tokens.
+    # Only consumed by the off-policy GRPO trainer (model_type == "offpolicy_grpo_language_model").
+    offpolicy_is_clip_mode: str = "clip"
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

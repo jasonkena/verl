@@ -201,6 +201,17 @@ student_rollout_ratio: 0.5
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 kl_reward_norm: sum
 
+# contextdistillation fork (off-policy IS-ratio rework, issue #48): how the per-token IS ratio
+# rho = pi_ctx(theta) / pi_behavior_old is bounded before multiplying the detached advantage.
+# pi_behavior is the policy that SAMPLED the rollout (student-context for student-sourced,
+# teacher-context for teacher-sourced), so a source-MATCHED path is on-policy (rho==1) and only the
+# cross path carries an IS correction. Band = [1-clip_ratio_low, 1+clip_ratio_high] (PPO knobs).
+#   "clip"     (default) => standard PPO pessimistic surrogate via compute_policy_loss_vanilla.
+#   "zero_adv"           => zero the advantage (zero gradient) for tokens with rho OUTSIDE the band
+#                           (both directions); in-band tokens get the raw rho*A score.
+# Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
+offpolicy_is_clip_mode: clip
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 
