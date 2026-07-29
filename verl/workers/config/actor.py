@@ -292,6 +292,13 @@ class ActorConfig(BaseConfig):
     #                does not weight by them. Sanity ablation (Jason 2026-07-29).
     # Only consumed by the off-policy GRPO trainer (model_type == "offpolicy_grpo_language_model").
     offpolicy_is_clip_mode: str = "clip"
+    # issue #48 (2026-07-29): how the RLOO baseline for each path's R_β is drawn within a prompt's uid
+    # group. "source_split" (DEFAULT, Jason 2026-07-27): the student objective baselines off the
+    # STUDENT-sourced rollouts S (LOO for i∈S, plain mean of S for i∈T); teacher symmetric with T.
+    # "pooled": baseline off ALL rollouts in the group regardless of source (LOO over the whole group
+    # for every rollout, both paths) — tests whether the source-split baseline's higher variance (each
+    # path sees only its own half) drove the OmniMath-nb gap. Only consumed by offpolicy_grpo.
+    offpolicy_baseline: str = "source_split"
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42

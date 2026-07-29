@@ -214,6 +214,16 @@ kl_reward_norm: sum
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 offpolicy_is_clip_mode: clip
 
+# contextdistillation fork (off-policy GRPO baseline source, issue #48 2026-07-29): how the RLOO
+# baseline for each path is drawn within a prompt's uid group.
+#   "source_split" (default) => student path baselines off STUDENT-sourced rollouts, teacher off
+#                               TEACHER-sourced (LOO within source; plain source-mean for cross rollouts).
+#   "pooled"                 => baseline off ALL rollouts in the group (LOO over the whole group, both
+#                               paths, ignoring source). Tests whether source-split baseline variance
+#                               drove the OmniMath-nb gap.
+# Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
+offpolicy_baseline: source_split
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 
