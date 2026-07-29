@@ -209,6 +209,8 @@ kl_reward_norm: sum
 #   "clip"     (default) => standard PPO pessimistic surrogate via compute_policy_loss_vanilla.
 #   "zero_adv"           => zero the advantage (zero gradient) for tokens with rho OUTSIDE the band
 #                           (both directions); in-band tokens get the raw rho*A score.
+#   "none"               => NO importance sampling: rho==1 everywhere (pure REINFORCE -A*grad log pi_ctx
+#                           on both paths). IS-ratio diagnostics still logged. Sanity ablation.
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 offpolicy_is_clip_mode: clip
 

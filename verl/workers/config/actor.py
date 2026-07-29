@@ -286,6 +286,10 @@ class ActorConfig(BaseConfig):
     #   "zero_adv" ⇒ zero the advantage (⇒ zero gradient, "gradients not perturbed") for any token
     #                whose ρ falls OUTSIDE the band (both directions); in-band tokens get the raw ρ·A
     #                score (no pessimistic max). Keeps the surrogate unbiased on the retained tokens.
+    #   "none"     ⇒ NO importance sampling at all: ρ≡1 for every token (pure REINFORCE score-function
+    #                −A·∇log π_ctx on both paths), ignoring the sampling policy entirely. The
+    #                off-policy IS-ratio diagnostics are still logged (the would-be ρ), but the loss
+    #                does not weight by them. Sanity ablation (Jason 2026-07-29).
     # Only consumed by the off-policy GRPO trainer (model_type == "offpolicy_grpo_language_model").
     offpolicy_is_clip_mode: str = "clip"
     ppo_epochs: int = 1
