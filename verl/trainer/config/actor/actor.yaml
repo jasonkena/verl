@@ -213,18 +213,28 @@ agro_teacher_pg_prescale: null
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 kl_reward_norm: sum
 
-# contextdistillation fork (off-policy IS-ratio rework, issue #48): how the per-token IS ratio
-# rho = pi_ctx(theta) / pi_behavior_old is bounded before multiplying the detached advantage.
-# pi_behavior is the policy that SAMPLED the rollout (student-context for student-sourced,
-# teacher-context for teacher-sourced), so a source-MATCHED path is on-policy (rho==1) and only the
-# cross path carries an IS correction. Band = [1-clip_ratio_low, 1+clip_ratio_high] (PPO knobs).
+# contextdistillation fork (off-policy IS, issue #48). TWO ORTHOGONAL AXES (split 2026-07-30):
+# offpolicy_is_clip_mode = HOW a REAL IS ratio rho = pi_ctx / pi_behavior_old is BOUNDED before it
+# multiplies the detached advantage. No-op when offpolicy_is_density=none (no real ratio then).
+# Band = [1-clip_ratio_low, 1+clip_ratio_high] (PPO knobs).
 #   "clip"     (default) => standard PPO pessimistic surrogate via compute_policy_loss_vanilla.
-#   "zero_adv"           => zero the advantage (zero gradient) for tokens with rho OUTSIDE the band
+#   "none"               => NO clipping: full raw rho*A on every token, unbounded (Jason 2026-07-30).
+#   "zero_adv"           => (back-compat) zero the advantage for tokens with rho OUTSIDE the band
 #                           (both directions); in-band tokens get the raw rho*A score.
-#   "none"               => NO importance sampling: rho==1 everywhere (pure REINFORCE -A*grad log pi_ctx
-#                           on both paths). IS-ratio diagnostics still logged. Sanity ablation.
+# NOTE: pre-2026-07-30 "none" here meant "no IS at all" (rho==1) -> that MOVED to offpolicy_is_density=none.
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 offpolicy_is_clip_mode: clip
+
+# offpolicy_is_density = WHETHER / against-what-density the IS ratio rho = pi_ctx / pi_behavior is formed.
+#   "behavior" (default) => the SAMPLING policy of each rollout (source-keyed lp_student^old /
+#                           lp_teacher^old); source-matched path on-policy (rho==1), cross path IS'd.
+#   "mixture"            => the mixture density mu_old = logaddexp(log r + lp_student^old,
+#                           log(1-r) + lp_teacher^old), r = student_rollout_ratio (original mu param,
+#                           #48 pre-rework). Shared denominator, no path exactly on-policy.
+#   "none"               => NO importance sampling: rho==1 per path (pure REINFORCE -A*grad log pi_ctx),
+#                           sampling policy ignored. Sanity ablation (formerly clip_mode=none, run 494899).
+# Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
+offpolicy_is_density: behavior
 
 # contextdistillation fork (off-policy GRPO baseline source, issue #48 2026-07-29): how the RLOO
 # baseline for each path is drawn within a prompt's uid group.

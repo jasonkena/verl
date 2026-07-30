@@ -285,24 +285,38 @@ class ActorConfig(BaseConfig):
     #                      driver of the bare-\boxed{} length collapse. Only consumed by the off-policy
     #                      GRPO trainer (model_type == "offpolicy_grpo_language_model").
     kl_reward_norm: str = "sum"
-    # issue #48 (off-policy IS-ratio rework): how the per-token importance-sampling ratio ρ =
-    # π_ctx(θ)/π_behavior_old is bounded before it multiplies the (detached) advantage. π_behavior is
-    # the policy that actually SAMPLED the rollout (student-context for student-sourced rollouts,
-    # teacher-context for teacher-sourced), so a source-MATCHED path is on-policy (ρ≡1) and only the
-    # cross path carries an IS correction. The clip band is [1−clip_ratio_low, 1+clip_ratio_high]
-    # (inherited from the standard PPO knobs). A NAMED knob (extensible) rather than a bool:
+    # issue #48 — TWO ORTHOGONAL off-policy IS axes (split cleanly 2026-07-30):
+    #
+    # offpolicy_is_clip_mode: HOW a REAL per-token IS ratio ρ = π_ctx(θ)/π_behavior_old is BOUNDED
+    # before it multiplies the (detached) advantage. Only meaningful when offpolicy_is_density != "none"
+    # (with density "none" there is no real ratio, so this axis is a no-op). Band = [1−clip_ratio_low,
+    # 1+clip_ratio_high] (inherited from the standard PPO knobs).
     #   "clip"     (DEFAULT) ⇒ standard PPO pessimistic surrogate max(−ρ·A, −clip(ρ,band)·A) via
     #                          compute_policy_loss_vanilla — out-of-band tokens get zero gradient only
     #                          on the pessimistic side; in-band unclipped.
-    #   "zero_adv" ⇒ zero the advantage (⇒ zero gradient, "gradients not perturbed") for any token
-    #                whose ρ falls OUTSIDE the band (both directions); in-band tokens get the raw ρ·A
-    #                score (no pessimistic max). Keeps the surrogate unbiased on the retained tokens.
-    #   "none"     ⇒ NO importance sampling at all: ρ≡1 for every token (pure REINFORCE score-function
-    #                −A·∇log π_ctx on both paths), ignoring the sampling policy entirely. The
-    #                off-policy IS-ratio diagnostics are still logged (the would-be ρ), but the loss
-    #                does not weight by them. Sanity ablation (Jason 2026-07-29).
+    #   "none"     ⇒ NO clipping: the full raw ρ·A on EVERY token, no band / pessimistic max / advantage
+    #                zeroing (the UNBOUNDED off-policy estimator, surrogate = −E[ρ·A]). Empirically the
+    #                cross-path ρ has stayed ≈0.9–1.0 so unbounded ≈ clip in practice; isolates whether
+    #                the clip band suppressed useful cross-path signal. (Jason 2026-07-30.)
+    #   "zero_adv" ⇒ (back-compat) zero the advantage (⇒ zero gradient) for any token whose ρ is OUTSIDE
+    #                the band (both directions); in-band tokens get the raw ρ·A score (no pessimistic max).
+    # NOTE: pre-2026-07-30, "none" on THIS knob meant "no importance sampling at all" (ρ≡1) — that meaning
+    # MOVED to offpolicy_is_density="none". Old commands using clip_mode=none now mean "no clipping".
     # Only consumed by the off-policy GRPO trainer (model_type == "offpolicy_grpo_language_model").
     offpolicy_is_clip_mode: str = "clip"
+    # offpolicy_is_density: WHETHER / against-what-density the IS ratio ρ = π_ctx/π_behavior is formed.
+    #   "behavior" (DEFAULT) ⇒ π_behavior = the SAMPLING policy of each rollout (source-keyed: lp_student
+    #                ^old for student-sourced rows, lp_teacher^old for teacher-sourced) — source-matched
+    #                path is on-policy (ρ≡1), only the cross path is IS-corrected. The current design.
+    #   "mixture"  ⇒ π_behavior = the mixture density μ_old = logaddexp(log r + lp_student^old, log(1−r)
+    #                + lp_teacher^old), r = student_rollout_ratio (the ORIGINAL μ parameterization, #48
+    #                pre-rework). Shared denominator for both paths, so NO path is exactly on-policy.
+    #                Kept selectable for future μ-vs-behavior A/Bs without a code checkout.
+    #   "none"     ⇒ NO importance sampling: ρ≡1 per path (pure REINFORCE score-function −A·∇log π_ctx),
+    #                the sampling policy ignored. This is the sanity ablation formerly spelled
+    #                clip_mode="none" (run 494899). The clip axis is a no-op under this setting.
+    # Only consumed by the off-policy GRPO trainer.
+    offpolicy_is_density: str = "behavior"
     # issue #48 (2026-07-29): how the RLOO baseline for each path's R_β is drawn within a prompt's uid
     # group. "source_split" (DEFAULT, Jason 2026-07-27): the student objective baselines off the
     # STUDENT-sourced rollouts S (LOO for i∈S, plain mean of S for i∈T); teacher symmetric with T.
