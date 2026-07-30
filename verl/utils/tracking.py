@@ -401,11 +401,18 @@ class ValidationGenerationsLogger:
     project_name: str = None
     experiment_name: str = None
 
-    def log(self, loggers, samples, step):
+    def log(self, loggers, samples, step, table_name: str = "val/generations"):
+        """Log a table of generation samples.
+
+        ``table_name`` is the metric key / table identifier (default ``"val/generations"``, so
+        validation logging is unchanged). Pass a distinct name (e.g. ``"train/generations_student"``)
+        to log to a SEPARATE table without clobbering the validation one — the wandb/swanlab paths
+        cache one table per name.
+        """
         if "wandb" in loggers:
-            self.log_generations_to_wandb(samples, step)
+            self.log_generations_to_wandb(samples, step, table_name)
         if "swanlab" in loggers:
-            self.log_generations_to_swanlab(samples, step)
+            self.log_generations_to_swanlab(samples, step, table_name)
         if "mlflow" in loggers:
             self.log_generations_to_mlflow(samples, step)
         if "trackio" in loggers:
@@ -417,33 +424,35 @@ class ValidationGenerationsLogger:
             self.log_generations_to_tensorboard(samples, step)
 
         if "vemlp_wandb" in loggers:
-            self.log_generations_to_vemlp_wandb(samples, step)
+            self.log_generations_to_vemlp_wandb(samples, step, table_name)
 
-    def log_generations_to_vemlp_wandb(self, samples, step):
+    def log_generations_to_vemlp_wandb(self, samples, step, table_name: str = "val/generations"):
         from volcengine_ml_platform import wandb as vemlp_wandb
 
-        self._log_generations_to_wandb(samples, step, vemlp_wandb)
+        self._log_generations_to_wandb(samples, step, vemlp_wandb, table_name)
 
-    def log_generations_to_wandb(self, samples, step):
+    def log_generations_to_wandb(self, samples, step, table_name: str = "val/generations"):
         import wandb
 
-        self._log_generations_to_wandb(samples, step, wandb)
+        self._log_generations_to_wandb(samples, step, wandb, table_name)
 
-    def _log_generations_to_wandb(self, samples, step, wandb):
-        """Log samples to wandb as a table"""
+    def _log_generations_to_wandb(self, samples, step, wandb, table_name: str = "val/generations"):
+        """Log samples to wandb as a table (one cached table per ``table_name``)."""
 
         # Create column names for all samples
         columns = ["step"] + sum(
             [[f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"] for i in range(len(samples))], []
         )
 
-        if not hasattr(self, "validation_table"):
-            # Initialize the table on first call
-            self.validation_table = wandb.Table(columns=columns)
+        # Cache one table per name so distinct tables (val vs train-student vs train-teacher) don't
+        # overwrite each other. A slash-bearing key (e.g. "train/generations_student") is not a valid
+        # attribute name, so derive a safe attr suffix.
+        attr = "_gen_table__" + table_name.replace("/", "__").replace("-", "_")
+        existing = getattr(self, attr, None)
 
         # Create a new table with same columns and existing data
         # Workaround for https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
-        new_table = wandb.Table(columns=columns, data=self.validation_table.data)
+        new_table = wandb.Table(columns=columns, data=existing.data if existing is not None else None)
 
         # Add new row with all data
         row_data = []
@@ -455,10 +464,10 @@ class ValidationGenerationsLogger:
 
         # Update reference and log
         if wandb.run is not None:
-            wandb.log({"val/generations": new_table}, step=step)
-        self.validation_table = new_table
+            wandb.log({table_name: new_table}, step=step)
+        setattr(self, attr, new_table)
 
-    def log_generations_to_swanlab(self, samples, step):
+    def log_generations_to_swanlab(self, samples, step, table_name: str = "val/generations"):
         """Log samples to swanlab as text"""
         import swanlab
 
@@ -471,7 +480,7 @@ class ValidationGenerationsLogger:
         swanlab_table.add(headers=headers, rows=swanlab_row_list)
 
         # Log to swanlab
-        swanlab.log({"val/generations": swanlab_table}, step=step)
+        swanlab.log({table_name: swanlab_table}, step=step)
 
     def log_generations_to_mlflow(self, samples, step):
         """Log validation generation to mlflow as artifacts"""
