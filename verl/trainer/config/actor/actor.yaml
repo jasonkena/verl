@@ -246,6 +246,17 @@ offpolicy_is_density: behavior
 # Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
 offpolicy_baseline: source_split
 
+# contextdistillation fork (off-policy GRPO KL placement, issue #48 2026-07-31): WHERE the KL-to-ref
+# regularizer acts.
+#   "reward" (default) => KL folded into the reward R_beta = r - beta*(lp_ctx - lp_ref) at the advantage
+#                         stage (k1 seq-logprob KL, IS-weighted through the advantage). Design to date.
+#   "direct"           => NO KL in the reward (R_beta = r); instead add a DIRECT differentiable per-token
+#                         KL LOSS (full-vocab Liger fused kernel, NOT IS-weighted), two terms both vs the
+#                         single unprivileged ref pi_ref(.|x): beta_student*KL(pi(.|x)||ref) +
+#                         beta_teacher*KL(pi(.|x,z)||ref), summed over all response tokens. No global fold.
+# Only used by the off-policy GRPO trainer (model_type == offpolicy_grpo_language_model).
+offpolicy_kl_mode: reward
+
 # Number of PPO epochs per batch
 ppo_epochs: 1
 

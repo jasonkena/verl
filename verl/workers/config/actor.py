@@ -324,6 +324,22 @@ class ActorConfig(BaseConfig):
     # for every rollout, both paths) — tests whether the source-split baseline's higher variance (each
     # path sees only its own half) drove the OmniMath-nb gap. Only consumed by offpolicy_grpo.
     offpolicy_baseline: str = "source_split"
+    # issue #48 (2026-07-31): WHERE the KL-to-ref regularizer acts in off-policy GRPO.
+    #   "reward"  (DEFAULT) ⇒ the KL(π_ctx ‖ π_ref) is folded into the reward R_β = r − β·(lp_ctx −
+    #                lp_ref) at the advantage stage (per-token k1 seq-logprob KL, IS-weighted through the
+    #                advantage) — the design to date. β = kl_{student,teacher}_grad_scale.
+    #   "direct"  ⇒ NO KL in the reward (R_β = r, plain outcome reward). Instead add a DIRECT
+    #                differentiable per-token KL LOSS to the objective (M6-style), computed full-vocab
+    #                via the Liger fused kernel and NOT importance-sampled. Two terms, both against the
+    #                single unprivileged ref π_ref(·|x) (Jason 2026-07-31: "ref is always unprivileged"):
+    #                  L_KL = β_student·Σ_t KL(π_θ(·|x)   ‖ π_ref(·|x))
+    #                       + β_teacher·Σ_t KL(π_θ(·|x,z) ‖ π_ref(·|x))
+    #                summed over ALL response tokens of ALL rollouts (both source halves), added to the
+    #                two-path clipped-IS-PG loss. No REINFORCE/global fold ("I don't care about the global
+    #                term"). β_student = kl_student_grad_scale, β_teacher = kl_teacher_grad_scale. Needs
+    #                the ref forward in the TRAINING pass (already-resident colocated ref, like M6).
+    # Only consumed by the off-policy GRPO trainer (model_type == "offpolicy_grpo_language_model").
+    offpolicy_kl_mode: str = "reward"
     ppo_epochs: int = 1
     shuffle: bool = False
     data_loader_seed: int = 42
