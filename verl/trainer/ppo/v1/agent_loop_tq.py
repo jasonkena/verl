@@ -297,6 +297,17 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
                 output.reward_score = final_output.reward_score
                 output.extra_fields["reward_extra_info"] = final_output.extra_fields["reward_extra_info"]
 
+        # Coupled-sampling (issue #54): on VALIDATION rollouts, ride the per-sample slot index into
+        # reward_extra_info (same passthrough "acc" uses) so CoupledSamplingPPOTrainer._val_metrics_update
+        # can rebuild the true (K_train, n/K_train) slot matrix for coupled_max@K'. Only present when
+        # the coupled slot split ran (COUPLED_SLOT_KEY stamped by _coupled_session_prompt); absent for
+        # max@K and all non-coupled runs, so this is a no-op there.
+        if validate and COUPLED_SLOT_KEY in kwargs:
+            for output in outputs:
+                rei = output.extra_fields.setdefault("reward_extra_info", {})
+                if isinstance(rei, dict):
+                    rei[COUPLED_SLOT_KEY] = int(kwargs[COUPLED_SLOT_KEY])
+
         # NOTE: agent loop may has multiple outputs, put each output into TransferQueue.
         # key format: {uid}_{session_id}_{index}
         # - uid: raw prompt uid from dataset
