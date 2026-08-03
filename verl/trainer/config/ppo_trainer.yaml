@@ -70,6 +70,11 @@ algorithm:
   # Advantage estimator type: "gae", "grpo", "reinforce_plus_plus", etc.
   adv_estimator: gae
 
+  # Test-time-search (contextdistillation issue #54): coupled-sampling advantage selection,
+  # read by CoupledSamplingPPOTrainer. coupled_method: null | "maxk" | "coupled". coupled_k: K.
+  coupled_method: null
+  coupled_k: 1
+
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 

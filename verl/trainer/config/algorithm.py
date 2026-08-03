@@ -667,3 +667,9 @@ class AlgoConfig(BaseConfig):
     # gdpo_reward_weights: per-dimension weights for aggregation (default: equal weights).
     gdpo_reward_keys: Optional[list[str]] = None
     gdpo_reward_weights: Optional[list[float]] = None
+    # Test-time-search (contextdistillation issue #54): selects the coupled-sampling advantage
+    # in CoupledSamplingPPOTrainer. coupled_method: "maxk" (sloo advantage for max@K) or
+    # "coupled" (loo_coupled_max over K slots). coupled_k: the K target / number of slots.
+    # Ignored unless the coupled_sampling trainer is active (trainer.v1.trainer_mode).
+    coupled_method: Optional[str] = None
+    coupled_k: int = 1
