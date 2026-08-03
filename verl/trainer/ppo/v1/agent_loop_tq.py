@@ -143,10 +143,14 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             agro = (not trajectory["validate"]) and model_type == AGRO_MODEL_TYPE
             n_student = self._agro_n_student(n, actor_cfg) if agro else 0
 
-            # Coupled-sampling slot split (issue #54): on TRAIN rollouts when algorithm.coupled_method
-            # == "coupled", partition the n sessions into K contiguous slots of n/K each. Off otherwise
-            # (identity) — non-coupled runs and validation are byte-for-byte unchanged.
-            coupled_k = self._coupled_slot_k(n) if not trajectory["validate"] else 0
+            # Coupled-sampling slot split (issue #54): when algorithm.coupled_method == "coupled",
+            # partition the n sessions into K contiguous slots of n/K each and prefix each slot. This
+            # applies on BOTH train AND validation: the deployed test-time policy for coupled_max IS
+            # the mixture of K prefixed slots, so validation must sample the same prefixed slots to
+            # measure it faithfully (per Jason). The max@K method (coupled_method != "coupled") never
+            # injects — its rollouts and val are prefix-free iid (identity gate, K == 0). Non-coupled
+            # runs are byte-for-byte unchanged.
+            coupled_k = self._coupled_slot_k(n)
 
             tasks = []
             for i in range(n):
