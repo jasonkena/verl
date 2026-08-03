@@ -44,6 +44,16 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 AGRO_MODEL_TYPE = "agro_teacher_student_language_model"
 AGRO_STUDENT_PROMPT_KEY = "student_prompt"
 
+# Coupled-sampling test-time search (contextdistillation issue #54): the "coupled" method splits a
+# prompt's n rollouts into K contiguous slots of n/K samples each; every slot is differentiated by a
+# 1-indexed prefix "This is the {slot+1}/{K} attempt at this problem." prepended to the problem, and
+# stamped with a `slot` column that rides into TransferQueue so CoupledSamplingPPOTrainer can reshape
+# scores into (K, n/K) for loo_coupled_max. Gated on algorithm.coupled_method == "coupled" and TRAIN
+# rollouts only; validation and all other runs are byte-for-byte unchanged. Kept as literals here so
+# this verl file needs no import from the contextdistillation package (injected via model.external_lib).
+COUPLED_SLOT_KEY = "slot"
+COUPLED_PREFIX_TMPL = "This is the {slot}/{K} attempt at this problem. "
+
 
 def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["top_p"] = 1.0
@@ -133,9 +143,15 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             agro = (not trajectory["validate"]) and model_type == AGRO_MODEL_TYPE
             n_student = self._agro_n_student(n, actor_cfg) if agro else 0
 
+            # Coupled-sampling slot split (issue #54): on TRAIN rollouts when algorithm.coupled_method
+            # == "coupled", partition the n sessions into K contiguous slots of n/K each. Off otherwise
+            # (identity) — non-coupled runs and validation are byte-for-byte unchanged.
+            coupled_k = self._coupled_slot_k(n) if not trajectory["validate"] else 0
+
             tasks = []
             for i in range(n):
                 session_prompt = self._agro_session_prompt(prompt, session_id=i, n_student=n_student, agro=agro)
+                session_prompt = self._coupled_session_prompt(session_prompt, session_id=i, n=n, K=coupled_k)
                 task = asyncio.create_task(
                     self._run_agent_loop(
                         run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
@@ -198,6 +214,56 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             session_prompt["rollout_source"] = 1.0
         else:
             session_prompt["rollout_source"] = 0.0
+        return session_prompt
+
+    def _coupled_slot_k(self, n: int) -> int:
+        """K for the coupled slot split, or 0 if the coupled method is off (issue #54).
+
+        Returns ``algorithm.coupled_k`` when ``algorithm.coupled_method == "coupled"``, else 0
+        (the identity gate: ``_coupled_session_prompt`` leaves the prompt untouched for K == 0).
+        Asserts n splits into K whole slots of >= 2 samples so the leave-one-out baseline is defined
+        (matches CoupledSamplingPPOTrainer.__init__)."""
+        algo = self.config.get("algorithm", None)
+        if algo is None or algo.get("coupled_method", None) != "coupled":
+            return 0
+        K = int(algo.get("coupled_k", 1))
+        assert K >= 1 and n % K == 0 and n // K >= 2, (
+            f"coupled: rollout.n ({n}) must be a multiple of coupled_k ({K}) with n/K >= 2; "
+            f"got n/K = {n / K}"
+        )
+        return K
+
+    @staticmethod
+    def _coupled_session_prompt(prompt: dict, *, session_id: int, n: int, K: int) -> dict:
+        """Per-session prompt for the coupled-sampling slot split (issue #54).
+
+        The n sessions are partitioned into K contiguous slots of ``n/K`` samples each, so
+        ``slot = session_id // (n // K)`` (slots 0..K-1). Slot ``s`` gets a 1-indexed prefix
+        ``"This is the {s+1}/{K} attempt at this problem. "`` prepended to the FIRST user message of
+        ``raw_prompt`` (differentiating the K sampling distributions, per the issue), and a ``slot``
+        column stamped so CoupledSamplingPPOTrainer can reshape scores into (K, n/K).
+
+        Contiguous blocks (not interleaved) match the ``coupled_advantages`` reshape, which buckets a
+        uid's rows by their stamped slot value — so the exact interleaving is actually irrelevant to
+        correctness (slot is read back explicitly), but contiguous keeps the layout legible.
+
+        With ``K == 0`` (coupled method off, or validation) this is the IDENTITY — returns ``prompt``
+        untouched, no copy, no prefix, no ``slot`` stamp — so non-coupled runs are byte-for-byte
+        unchanged."""
+        if K == 0:
+            return prompt
+        slot = session_id // (n // K)
+        session_prompt = dict(prompt)
+        prefix = COUPLED_PREFIX_TMPL.format(slot=slot + 1, K=K)
+        raw = session_prompt.get("raw_prompt")
+        # raw_prompt is a list of {role, content} message dicts; prepend the prefix to the first
+        # user-turn content. Copy the list + the mutated message so we never alias the shared batch row.
+        messages = [dict(m) for m in list(raw)]
+        target = next((m for m in messages if m.get("role") == "user"), messages[-1] if messages else None)
+        assert target is not None, "coupled: raw_prompt has no message to prefix"
+        target["content"] = prefix + str(target.get("content", ""))
+        session_prompt["raw_prompt"] = messages
+        session_prompt[COUPLED_SLOT_KEY] = slot
         return session_prompt
 
     async def _agent_loop_postprocess(
