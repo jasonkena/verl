@@ -55,6 +55,23 @@ COUPLED_SLOT_KEY = "slot"
 COUPLED_PREFIX_TMPL = "This is the {slot}/{K} attempt at this problem. "
 
 
+def _prepend_prefix_to_raw_prompt(prompt: dict, prefix: str) -> dict:
+    """Return a copy of ``prompt`` with ``prefix`` prepended to the first user-turn content.
+
+    ``raw_prompt`` is a list of ``{role, content}`` message dicts; the prefix goes on the first
+    user message (falling back to the last message if none is a user turn). The message list and the
+    mutated message are copied so the shared batch row is never aliased. Shared by the coupled slot
+    split and the maxk fixed-prefix debug control so both use byte-identical prepend logic."""
+    session_prompt = dict(prompt)
+    raw = session_prompt.get("raw_prompt")
+    messages = [dict(m) for m in list(raw)]
+    target = next((m for m in messages if m.get("role") == "user"), messages[-1] if messages else None)
+    assert target is not None, "coupled: raw_prompt has no message to prefix"
+    target["content"] = prefix + str(target.get("content", ""))
+    session_prompt["raw_prompt"] = messages
+    return session_prompt
+
+
 def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["top_p"] = 1.0
     params["top_k"] = -1
@@ -151,11 +168,16 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             # injects — its rollouts and val are prefix-free iid (identity gate, K == 0). Non-coupled
             # runs are byte-for-byte unchanged.
             coupled_k = self._coupled_slot_k(n)
+            # Debug control (issue #54): maxk with a FIXED 1/1 prefix on every iid sample (no slot
+            # split, no slot stamp) — makes maxk-K1 byte-for-byte identical to coupled-K1 to isolate
+            # the prefix effect. Independent of coupled_k (which is 0 here since method != "coupled").
+            maxk_fixed_prefix = self._maxk_fixed_prefix()
 
             tasks = []
             for i in range(n):
                 session_prompt = self._agro_session_prompt(prompt, session_id=i, n_student=n_student, agro=agro)
                 session_prompt = self._coupled_session_prompt(session_prompt, session_id=i, n=n, K=coupled_k)
+                session_prompt = self._maxk_fixed_prefix_prompt(session_prompt, enabled=maxk_fixed_prefix)
                 task = asyncio.create_task(
                     self._run_agent_loop(
                         run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
@@ -257,18 +279,36 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         if K == 0:
             return prompt
         slot = session_id // (n // K)
-        session_prompt = dict(prompt)
         prefix = COUPLED_PREFIX_TMPL.format(slot=slot + 1, K=K)
-        raw = session_prompt.get("raw_prompt")
-        # raw_prompt is a list of {role, content} message dicts; prepend the prefix to the first
-        # user-turn content. Copy the list + the mutated message so we never alias the shared batch row.
-        messages = [dict(m) for m in list(raw)]
-        target = next((m for m in messages if m.get("role") == "user"), messages[-1] if messages else None)
-        assert target is not None, "coupled: raw_prompt has no message to prefix"
-        target["content"] = prefix + str(target.get("content", ""))
-        session_prompt["raw_prompt"] = messages
+        session_prompt = _prepend_prefix_to_raw_prompt(prompt, prefix)
         session_prompt[COUPLED_SLOT_KEY] = slot
         return session_prompt
+
+    def _maxk_fixed_prefix(self) -> bool:
+        """Whether the maxk fixed-prefix debug control is active (issue #54).
+
+        True only when ``algorithm.coupled_method == "maxk"`` AND
+        ``algorithm.coupled_maxk_fixed_prefix`` is set. Off for the "coupled" method (which does its
+        own per-slot prefixing) and for any non-coupled_sampling run."""
+        algo = self.config.get("algorithm", None)
+        if algo is None or algo.get("coupled_method", None) != "maxk":
+            return False
+        return bool(algo.get("coupled_maxk_fixed_prefix", False))
+
+    @staticmethod
+    def _maxk_fixed_prefix_prompt(prompt: dict, *, enabled: bool) -> dict:
+        """Prepend the FIXED 1-slot prefix to a maxk rollout's prompt (issue #54 debug control).
+
+        Every session (train AND val) gets the SAME ``"This is the 1/1 attempt at this problem. "``
+        prefix — the 1-indexed COUPLED_PREFIX_TMPL at slot 1 of K 1 — with NO ``slot`` stamp and no
+        per-slot differentiation, so the samples stay iid. This makes maxk-at-K=1 byte-for-byte
+        identical to coupled-at-K=1 (same prefix + sloo==loo_coupled_max advantage), isolating the
+        prefix as the sole variable. Identity (returns ``prompt`` untouched) when ``enabled`` is
+        False, so ordinary maxk runs are byte-for-byte unchanged."""
+        if not enabled:
+            return prompt
+        prefix = COUPLED_PREFIX_TMPL.format(slot=1, K=1)
+        return _prepend_prefix_to_raw_prompt(prompt, prefix)
 
     async def _agent_loop_postprocess(
         self, output: AgentLoopOutput | list[AgentLoopOutput], validate, **kwargs

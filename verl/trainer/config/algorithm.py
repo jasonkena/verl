@@ -673,3 +673,9 @@ class AlgoConfig(BaseConfig):
     # Ignored unless the coupled_sampling trainer is active (trainer.v1.trainer_mode).
     coupled_method: Optional[str] = None
     coupled_k: int = 1
+    # Debug control (issue #54): when coupled_method == "maxk", prepend the FIXED 1-slot prefix
+    # "This is the 1/1 attempt at this problem. " to EVERY iid rollout (train AND val), with NO
+    # slot stamp and NO per-slot differentiation. This makes maxk-at-K=1 byte-for-byte identical to
+    # coupled-at-K=1 (same prefix, same sloo==loo_coupled_max advantage), isolating whether the
+    # prefix alone explains coupled>maxk at K=1. No effect when coupled_method != "maxk".
+    coupled_maxk_fixed_prefix: bool = False

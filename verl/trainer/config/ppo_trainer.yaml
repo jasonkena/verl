@@ -74,6 +74,9 @@ algorithm:
   # read by CoupledSamplingPPOTrainer. coupled_method: null | "maxk" | "coupled". coupled_k: K.
   coupled_method: null
   coupled_k: 1
+  # Debug control (issue #54): with coupled_method="maxk", add the fixed "1/1 attempt" prefix to
+  # every iid rollout (train+val, no slot stamp) so maxk-K1 == coupled-K1 exactly. No-op otherwise.
+  coupled_maxk_fixed_prefix: false
 
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
