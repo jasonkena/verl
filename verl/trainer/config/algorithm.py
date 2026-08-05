@@ -674,6 +674,11 @@ class AlgoConfig(BaseConfig):
     # Ignored unless the coupled_sampling trainer is active (trainer.v1.trainer_mode).
     coupled_method: Optional[str] = None
     coupled_k: int = 1
+    # Std-normalize the advantages (GRPO-style, but on the advantages not the raw rewards):
+    # maxk divides each uid group's advantages by their std (+eps); coupled divides each SLOT'S
+    # advantages by that slot's own std (+eps) — normalization computed PER SLOT. No effect on
+    # maxrl (already /mean). Off by default. Only used by the coupled_sampling trainer.
+    coupled_norm_adv_by_std: bool = False
     # Debug control (issue #54): when coupled_method == "maxk", prepend the FIXED 1-slot prefix
     # "This is the 1/1 attempt at this problem. " to EVERY iid rollout (train AND val), with NO
     # slot stamp and NO per-slot differentiation. This makes maxk-at-K=1 byte-for-byte identical to

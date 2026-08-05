@@ -78,6 +78,10 @@ algorithm:
   # every iid rollout (train+val, no slot stamp) so maxk-K1 == coupled-K1 exactly. No-op otherwise.
   coupled_maxk_fixed_prefix: false
 
+  # Test-time-search (issue #54): std-normalize advantages (on the advantages, not raw rewards) --
+  # maxk per uid-group, coupled PER SLOT (each slot row / its own std + eps). No effect on maxrl.
+  coupled_norm_adv_by_std: false
+
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 
