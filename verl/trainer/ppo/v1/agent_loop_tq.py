@@ -245,12 +245,13 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
     def _coupled_slot_k(self, n: int) -> int:
         """K for the coupled slot split, or 0 if the coupled method is off (issue #54).
 
-        Returns ``algorithm.coupled_k`` when ``algorithm.coupled_method == "coupled"``, else 0
-        (the identity gate: ``_coupled_session_prompt`` leaves the prompt untouched for K == 0).
-        Asserts n splits into K whole slots of >= 2 samples so the leave-one-out baseline is defined
-        (matches CoupledSamplingPPOTrainer.__init__)."""
+        Returns ``algorithm.coupled_k`` for the slot-structured methods (``coupled`` and
+        ``coupled_maxrl``), else 0 (the identity gate: ``_coupled_session_prompt`` leaves the prompt
+        untouched for K == 0). Both slot methods need the same prefix split + slot stamp so the
+        trainer can reshape scores into (K, n/K). Asserts n splits into K whole slots of >= 2 samples
+        so the leave-one-out baseline is defined (matches CoupledSamplingPPOTrainer.__init__)."""
         algo = self.config.get("algorithm", None)
-        if algo is None or algo.get("coupled_method", None) != "coupled":
+        if algo is None or algo.get("coupled_method", None) not in ("coupled", "coupled_maxrl"):
             return 0
         K = int(algo.get("coupled_k", 1))
         assert K >= 1 and n % K == 0 and n // K >= 2, (
