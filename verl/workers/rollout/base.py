@@ -84,6 +84,10 @@ _ROLLOUT_REGISTRY = {
     ("vllm", "async"): "verl.workers.rollout.vllm_rollout.ServerAdapter",
     ("sglang", "async"): "verl.workers.rollout.sglang_rollout.sglang_rollout.ServerAdapter",
     ("trtllm", "async"): "verl.workers.rollout.trtllm_rollout.trtllm_rollout.ServerAdapter",
+    # HF backend (issue #54): the vLLM ServerAdapter is backend-agnostic — it sends
+    # weights over a generic ZMQ/CUDA-IPC BucketedWeightSender and resolves the server
+    # actor by f"{rollout.name}_server_{r}_{n}", so it drives HFHttpServer verbatim.
+    ("hf", "async"): "verl.workers.rollout.vllm_rollout.ServerAdapter",
 }
 
 
