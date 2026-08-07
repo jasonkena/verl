@@ -158,6 +158,16 @@ class ReplayBuffer:
         kept_keys, kept_tags = [], []
         dropped_keys, dropped_tags = [], []
         for key, tag in zip(batch.keys, batch.tags, strict=False):
+            # A failure-branch session tag (e.g. a rollout that hit a transient
+            # `zmq.error.ZMQError: Too many open files` under high-fan-out validation) is written as
+            # `{"status": "failure"}` with NO `global_steps` (agent_loop_tq.py). `sample()` still
+            # surfaces failure keys alongside finished ones, so without this guard a single transient
+            # failure would KeyError here and crash the whole run. A failed session has no trainable
+            # trajectory, so treat a missing `global_steps` as maximally stale and drop it.
+            if "global_steps" not in tag:
+                dropped_keys.append(key)
+                dropped_tags.append({**tag, "global_steps": global_steps - self.parameter_sync_step})
+                continue
             prompt_global_steps = tag["global_steps"]
             if (global_steps - prompt_global_steps + 1) / self.parameter_sync_step > self.max_off_policy_threshold:
                 dropped_keys.append(key)
