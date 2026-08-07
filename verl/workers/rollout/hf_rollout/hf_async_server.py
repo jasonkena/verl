@@ -91,12 +91,20 @@ _HF_MAX_MICRO_BATCH = int(os.getenv("VERL_HF_MAX_MICRO_BATCH", "4096"))
 class _PendingRequest:
     """One awaiting generate() call, parked until the batcher dispatches its wave."""
 
-    __slots__ = ("prompt_ids", "sampling_params", "max_tokens", "future")
+    __slots__ = ("prompt_ids", "sampling_params", "max_tokens", "want_logprobs", "future")
 
-    def __init__(self, prompt_ids: list[int], sampling_params: dict, max_tokens: int, future: asyncio.Future):
+    def __init__(
+        self,
+        prompt_ids: list[int],
+        sampling_params: dict,
+        max_tokens: int,
+        want_logprobs: bool,
+        future: asyncio.Future,
+    ):
         self.prompt_ids = prompt_ids
         self.sampling_params = sampling_params
         self.max_tokens = max_tokens
+        self.want_logprobs = want_logprobs
         self.future = future
 
 
@@ -357,6 +365,11 @@ class HFHttpServer:
             raise NotImplementedError("HF rollout backend is text-only.")
 
         sampling_params = dict(sampling_params)
+        # verl's agent loop passes `logprobs` truthy when rollout.calculate_log_probs
+        # is set (the trainer then reads `rollout_log_probs` for the on-policy debug
+        # metric / bypass mode). vLLM sets it to 0 to mean "top-0 = the sampled token
+        # only"; any non-None value here means the caller wants per-token logprobs.
+        want_logprobs = sampling_params.pop("logprobs", None) is not None
         max_tokens = self._resolve_max_tokens(prompt_ids, sampling_params)
 
         loop = asyncio.get_running_loop()
@@ -364,12 +377,12 @@ class HFHttpServer:
         if self._queue is None:
             self._queue = asyncio.Queue()
             self._batcher_task = asyncio.create_task(self._batcher_loop())
-        await self._queue.put(_PendingRequest(prompt_ids, sampling_params, max_tokens, future))
-        token_ids = await future
+        await self._queue.put(_PendingRequest(prompt_ids, sampling_params, max_tokens, want_logprobs, future))
+        token_ids, log_probs = await future
 
         return TokenOutput(
             token_ids=token_ids,
-            log_probs=None,
+            log_probs=log_probs,
             routed_experts=None,
             stop_reason="completed",
             num_preempted=None,
@@ -419,6 +432,7 @@ class HFHttpServer:
             int(sp.get("top_k", -1) or -1),
             round(float(sp.get("repetition_penalty", 1.0)), 6),
             req.max_tokens,
+            req.want_logprobs,
         )
 
     @torch.no_grad()
@@ -428,6 +442,7 @@ class HFHttpServer:
 
         sp = reqs[0].sampling_params
         max_tokens = reqs[0].max_tokens
+        want_logprobs = reqs[0].want_logprobs  # uniform within a group (part of the key)
         temperature = float(sp.get("temperature", 1.0))
         greedy = temperature == 0.0
 
@@ -468,7 +483,7 @@ class HFHttpServer:
                     generation_config=generation_config,
                     use_cache=True,
                     return_dict_in_generate=True,
-                    output_scores=False,
+                    output_scores=want_logprobs,
                 )
 
         self._inflight += 1
@@ -480,14 +495,28 @@ class HFHttpServer:
         seq = output.sequences  # (B, max_len + generated)
         responses = seq[:, max_len:].tolist()
 
+        # Per-token log-probs of the SAMPLED tokens. compute_transition_scores maps
+        # the generation `scores` (already temperature/top_p/top_k-warped logits ->
+        # log-softmax when normalize_logits=True) to the log-prob of each chosen
+        # token. This matches vLLM's rollout_log_probs semantics (log-prob under the
+        # sampling distribution) and the actor's temperature-scaled recomputation.
+        transition = None
+        if want_logprobs:
+            transition = self.model.compute_transition_scores(
+                output.sequences, output.scores, normalize_logits=True
+            ).tolist()  # (B, generated)
+
         # Truncate each response at the first EOS (inclusive) to mirror vLLM's
         # token-in-token-out semantics (the AgentLoop builds its own response_mask).
         for i, r in enumerate(reqs):
             toks = responses[i]
+            cut = len(toks)
             if self.eos_token_id is not None and self.eos_token_id in toks:
-                toks = toks[: toks.index(self.eos_token_id) + 1]
+                cut = toks.index(self.eos_token_id) + 1
+                toks = toks[:cut]
+            lps = transition[i][:cut] if transition is not None else None
             if not r.future.done():
-                r.future.set_result(toks)
+                r.future.set_result((toks, lps))
 
 
 class HFReplica(RolloutReplica):
