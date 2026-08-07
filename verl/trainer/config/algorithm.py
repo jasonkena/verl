@@ -685,3 +685,10 @@ class AlgoConfig(BaseConfig):
     # coupled-at-K=1 (same prefix, same sloo==loo_coupled_max advantage), isolating whether the
     # prefix alone explains coupled>maxk at K=1. No effect when coupled_method != "maxk".
     coupled_maxk_fixed_prefix: bool = False
+    # Slot-differentiation prefix style (issue #54 maze testbed). "attempt" (default) prepends the
+    # natural-language "This is the {slot}/{K} attempt at this problem. " sentence — right for chat
+    # models. "slot_token" prepends a bare "<ID{slot}> " vocab token — right for the from-scratch
+    # WordLevel maze model, whose SFT prior was trained with a random <IDk> after <bos> (so a coupled
+    # slot renders as "<bos> <IDk> GRID_START ..."). Applies to BOTH the coupled slot split and the
+    # maxk fixed-prefix control (which then uses "<ID1> "). Only used by the coupled_sampling trainer.
+    coupled_prefix_style: str = "attempt"

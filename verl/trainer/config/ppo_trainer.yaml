@@ -82,6 +82,11 @@ algorithm:
   # maxk per uid-group, coupled PER SLOT (each slot row / its own std + eps). No effect on maxrl.
   coupled_norm_adv_by_std: false
 
+  # Slot-differentiation prefix style (issue #54 maze testbed): "attempt" (default, natural-language
+  # "This is the {slot}/{K} attempt..." for chat models) | "slot_token" (bare "<ID{slot}> " vocab
+  # token for the from-scratch WordLevel maze model). Applies to the coupled split + maxk control.
+  coupled_prefix_style: attempt
+
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 

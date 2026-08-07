@@ -53,6 +53,20 @@ AGRO_STUDENT_PROMPT_KEY = "student_prompt"
 # this verl file needs no import from the contextdistillation package (injected via model.external_lib).
 COUPLED_SLOT_KEY = "slot"
 COUPLED_PREFIX_TMPL = "This is the {slot}/{K} attempt at this problem. "
+# Bare vocab-token prefix for the from-scratch WordLevel maze model (issue #54 maze testbed): the
+# SFT prior was trained with a random "<IDk>" token right after "<bos>", so a coupled slot renders as
+# "<bos> <IDk> GRID_START ...". Selected by algorithm.coupled_prefix_style == "slot_token".
+COUPLED_SLOT_TOKEN_TMPL = "<ID{slot}> "
+
+
+def _coupled_prefix(slot: int, K: int, style: str) -> str:
+    """1-indexed slot-differentiation prefix for the coupled split / maxk control (issue #54).
+
+    ``style == "attempt"`` -> the natural-language attempt sentence (chat models); ``"slot_token"``
+    -> a bare ``"<ID{slot}> "`` vocab token (from-scratch WordLevel maze model). ``slot`` is 1-indexed."""
+    if style == "slot_token":
+        return COUPLED_SLOT_TOKEN_TMPL.format(slot=slot)
+    return COUPLED_PREFIX_TMPL.format(slot=slot, K=K)
 
 
 def _prepend_prefix_to_raw_prompt(prompt: dict, prefix: str) -> dict:
@@ -172,12 +186,18 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             # split, no slot stamp) — makes maxk-K1 byte-for-byte identical to coupled-K1 to isolate
             # the prefix effect. Independent of coupled_k (which is 0 here since method != "coupled").
             maxk_fixed_prefix = self._maxk_fixed_prefix()
+            # Slot-prefix style (issue #54 maze): "attempt" sentence (chat) vs "<IDk> " token (maze).
+            prefix_style = self._coupled_prefix_style()
 
             tasks = []
             for i in range(n):
                 session_prompt = self._agro_session_prompt(prompt, session_id=i, n_student=n_student, agro=agro)
-                session_prompt = self._coupled_session_prompt(session_prompt, session_id=i, n=n, K=coupled_k)
-                session_prompt = self._maxk_fixed_prefix_prompt(session_prompt, enabled=maxk_fixed_prefix)
+                session_prompt = self._coupled_session_prompt(
+                    session_prompt, session_id=i, n=n, K=coupled_k, style=prefix_style
+                )
+                session_prompt = self._maxk_fixed_prefix_prompt(
+                    session_prompt, enabled=maxk_fixed_prefix, style=prefix_style
+                )
                 task = asyncio.create_task(
                     self._run_agent_loop(
                         run_sampling_params, trajectory=trajectory, trace=trace, session_id=i, **session_prompt
@@ -260,8 +280,15 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         )
         return K
 
+    def _coupled_prefix_style(self) -> str:
+        """Slot-prefix style from algorithm.coupled_prefix_style ('attempt' default | 'slot_token')."""
+        algo = self.config.get("algorithm", None)
+        if algo is None:
+            return "attempt"
+        return str(algo.get("coupled_prefix_style", "attempt"))
+
     @staticmethod
-    def _coupled_session_prompt(prompt: dict, *, session_id: int, n: int, K: int) -> dict:
+    def _coupled_session_prompt(prompt: dict, *, session_id: int, n: int, K: int, style: str = "attempt") -> dict:
         """Per-session prompt for the coupled-sampling slot split (issue #54).
 
         The n sessions are partitioned into K contiguous slots of ``n/K`` samples each, so
@@ -280,7 +307,7 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         if K == 0:
             return prompt
         slot = session_id // (n // K)
-        prefix = COUPLED_PREFIX_TMPL.format(slot=slot + 1, K=K)
+        prefix = _coupled_prefix(slot + 1, K, style)
         session_prompt = _prepend_prefix_to_raw_prompt(prompt, prefix)
         session_prompt[COUPLED_SLOT_KEY] = slot
         return session_prompt
@@ -297,7 +324,7 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         return bool(algo.get("coupled_maxk_fixed_prefix", False))
 
     @staticmethod
-    def _maxk_fixed_prefix_prompt(prompt: dict, *, enabled: bool) -> dict:
+    def _maxk_fixed_prefix_prompt(prompt: dict, *, enabled: bool, style: str = "attempt") -> dict:
         """Prepend the FIXED 1-slot prefix to a maxk rollout's prompt (issue #54 debug control).
 
         Every session (train AND val) gets the SAME ``"This is the 1/1 attempt at this problem. "``
@@ -308,7 +335,7 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         False, so ordinary maxk runs are byte-for-byte unchanged."""
         if not enabled:
             return prompt
-        prefix = COUPLED_PREFIX_TMPL.format(slot=1, K=1)
+        prefix = _coupled_prefix(1, 1, style)
         return _prepend_prefix_to_raw_prompt(prompt, prefix)
 
     async def _agent_loop_postprocess(
