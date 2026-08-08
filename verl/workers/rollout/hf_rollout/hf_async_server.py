@@ -53,8 +53,10 @@ caller. This reproduces the batched shape the benchmark measured.
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
 import os
+import sys
 from typing import Any, Callable, Optional
 
 import ray
@@ -86,6 +88,30 @@ _HF_BATCH_LINGER_S = float(os.getenv("VERL_HF_BATCH_LINGER_S", "0.005"))
 # Cap the per-wave sample count so a huge step (e.g. 32768 seqs) is chunked rather
 # than attempted in one generate call. Mirrors maxrl's sample-level micro batch.
 _HF_MAX_MICRO_BATCH = int(os.getenv("VERL_HF_MAX_MICRO_BATCH", "4096"))
+# Watchdog: max wall-clock for a single model.generate wave. A tiny maze model
+# generating <=180 tokens for a <=4096-seq wave completes in seconds, so a wave
+# still running after this long is wedged (CUDA sync / transformers-internal). We
+# turn that silent hang into a LOUD, fast failure with a full stack dump instead of
+# letting the sole batcher block forever. 0 disables. Generous default (real waves
+# finish in seconds; this only fires on a genuine stall).
+_HF_GENERATE_TIMEOUT_S = float(os.getenv("VERL_HF_GENERATE_TIMEOUT_S", "600"))
+
+
+def _dump_all_stacks(reason: str) -> None:
+    """Dump every thread's Python stack to stderr — makes an invisible wedge visible.
+
+    Called on any batcher death or generate-wave timeout so the log carries the
+    exact frame the process is stuck in (event loop, to_thread worker, or a CUDA
+    sync inside model.generate) instead of a silent freeze. Best-effort: never
+    raises out of the diagnostics path.
+    """
+    try:
+        sys.stderr.write(f"\n===== HF rollout stack dump: {reason} =====\n")
+        sys.stderr.flush()
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real failure
+        logger.exception("HF rollout: stack dump itself failed")
 
 
 class _PendingRequest:
@@ -176,6 +202,18 @@ class HFHttpServer:
         self._queue: Optional[asyncio.Queue] = None
         self._batcher_task: Optional[asyncio.Task] = None
         self._inflight = 0
+        # Every request currently parked on a future, so a batcher death can fail
+        # them ALL (not just the one guarded group) — a hung caller becomes a loud
+        # per-request exception the AgentLoop turns into a `failure` tag + traceback.
+        self._pending: set[_PendingRequest] = set()
+        # Sticky death: once the batcher dies, new generate() calls fail-fast with
+        # this instead of parking on a future that will never resolve.
+        self._batcher_dead: Optional[BaseException] = None
+        # Dump C-level stacks too (CUDA/transformers stalls the event loop can't see).
+        try:
+            faulthandler.enable()
+        except Exception:  # noqa: BLE001 — some sandboxes lack a real stderr fd
+            pass
 
         logger.info(
             f"HFHttpServer replica_rank={replica_rank} node_rank={node_rank} "
@@ -310,8 +348,14 @@ class HFHttpServer:
         return
 
     async def wait_for_requests_to_drain(self):
-        # Yield until no generate wave is in flight.
+        # Yield until no generate wave is in flight. Surface a dead batcher instead
+        # of "succeeding" while parked callers hang forever (which reads as a clean
+        # drain but is really a deadlock).
         while self._inflight > 0:
+            if self._batcher_dead is not None:
+                raise RuntimeError(
+                    "HF rollout batcher died while draining"
+                ) from self._batcher_dead
             await asyncio.sleep(0.01)
 
     async def abort_all_requests(self, reset_prefix_cache: bool = True) -> dict[str, Any]:
@@ -372,13 +416,25 @@ class HFHttpServer:
         want_logprobs = sampling_params.pop("logprobs", None) is not None
         max_tokens = self._resolve_max_tokens(prompt_ids, sampling_params)
 
+        # Fail-fast if the batcher has already died — never park on a future that
+        # can never resolve (that is the silent hang we are eliminating).
+        if self._batcher_dead is not None:
+            raise RuntimeError(
+                "HF rollout batcher is dead; refusing new generate()"
+            ) from self._batcher_dead
+
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         if self._queue is None:
             self._queue = asyncio.Queue()
             self._batcher_task = asyncio.create_task(self._batcher_loop())
-        await self._queue.put(_PendingRequest(prompt_ids, sampling_params, max_tokens, want_logprobs, future))
-        token_ids, log_probs = await future
+        req = _PendingRequest(prompt_ids, sampling_params, max_tokens, want_logprobs, future)
+        self._pending.add(req)
+        await self._queue.put(req)
+        try:
+            token_ids, log_probs = await future
+        finally:
+            self._pending.discard(req)
 
         return TokenOutput(
             token_ids=token_ids,
@@ -394,8 +450,32 @@ class HFHttpServer:
 
         Requests are grouped by a sampling-params key (temperature/top_p/top_k/
         max_tokens) so a single generate() call is valid for the whole group.
+
+        This is the SOLE task every generate() future depends on, so it must never
+        die silently: the whole body is guarded so any escape (a raise in queue.get/
+        partitioning, or a wave that fails past its own guard) is logged with a stack
+        dump, marks the batcher dead, and fails EVERY parked future — turning what was
+        a 75-min invisible wedge into a loud, immediate per-request crash.
         """
         assert self._queue is not None
+        try:
+            await self._batcher_loop_body()
+        except BaseException as e:  # noqa: BLE001 — the one task all futures depend on
+            logger.exception(f"HF rollout batcher_loop died: {e!r}")
+            _dump_all_stacks(f"batcher_loop died: {e!r}")
+            self._batcher_dead = e
+            self._fail_all_pending(e)
+            raise
+
+    def _fail_all_pending(self, exc: BaseException) -> None:
+        """Propagate `exc` to every parked future so no caller hangs forever."""
+        wrapped = RuntimeError(f"HF rollout batcher died: {exc!r}")
+        wrapped.__cause__ = exc
+        for req in list(self._pending):
+            if not req.future.done():
+                req.future.set_exception(wrapped)
+
+    async def _batcher_loop_body(self):
         while True:
             first: _PendingRequest = await self._queue.get()
             batch = [first]
@@ -488,7 +568,26 @@ class HFHttpServer:
 
         self._inflight += 1
         try:
-            output = await asyncio.to_thread(_do_generate)
+            gen_coro = asyncio.to_thread(_do_generate)
+            if _HF_GENERATE_TIMEOUT_S > 0:
+                try:
+                    output = await asyncio.wait_for(gen_coro, timeout=_HF_GENERATE_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    # A wave that never returns is the wedge we are hunting. Make it
+                    # LOUD: dump every stack (the to_thread worker's frame shows the
+                    # exact spot inside model.generate / CUDA) and fail the group. The
+                    # orphaned worker thread cannot be cancelled, but the batcher no
+                    # longer blocks on it and the step crashes with a real traceback.
+                    _dump_all_stacks(
+                        f"model.generate wave of {len(reqs)} seqs exceeded "
+                        f"{_HF_GENERATE_TIMEOUT_S}s (max_tokens={max_tokens})"
+                    )
+                    raise TimeoutError(
+                        f"HF model.generate wave ({len(reqs)} seqs, max_tokens={max_tokens}) "
+                        f"exceeded {_HF_GENERATE_TIMEOUT_S}s — likely a CUDA/transformers stall"
+                    )
+            else:
+                output = await gen_coro
         finally:
             self._inflight -= 1
 
