@@ -459,10 +459,16 @@ def rearrange_micro_batches(
         # Place smaller micro-batches at both ends to reduce the bubbles exposed during the warm-up and cool-down.
         micro_bsz_idx = micro_bsz_idx[::2][::-1] + micro_bsz_idx[1::2]
 
+    # Unbind nested tensors ONCE up front, then slice each partition from the
+    # precomputed row-lists. index_select_tensor_dict would re-unbind every nested
+    # tensor per call; at large batch * high micro-batch count (e.g. 32k rows /
+    # ~600 partitions with dynamic bsz) that per-row nested unbind_int becomes a
+    # multi-minute O(partitions * batch_size) GIL-bound stall. This is O(batch_size).
+    prepared = tu.unbind_tensor_dict(batch)
     micro_batches = []
 
     for partition in micro_bsz_idx:
-        curr_micro_batch = tu.index_select_tensor_dict(batch, partition)
+        curr_micro_batch = tu.index_select_unbound(prepared, partition)
         micro_batches.append(curr_micro_batch)
 
     return micro_batches, micro_bsz_idx

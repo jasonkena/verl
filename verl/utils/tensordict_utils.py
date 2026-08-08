@@ -478,6 +478,15 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
         - Nested tensors are unbound, indexed, and rebound
         - NonTensorStack is indexed by batch dimension
         - NonTensorData (scalar metadata) is preserved unchanged
+
+    Performance:
+        Callers that index the *same* batch many times (e.g. one call per
+        micro-batch partition in ``rearrange_micro_batches``) should instead use
+        ``unbind_tensor_dict`` once and ``index_select_unbound`` per partition.
+        Each nested-tensor ``unbind()`` here re-materializes every row (a per-row
+        Python ``_torch_check`` in torch nested ops), so re-unbinding per call is
+        O(num_calls * batch_size) -- quadratic at large batch * high partition
+        counts.
     """
     if isinstance(indices, list):
         indices = torch.tensor(indices)
@@ -508,6 +517,62 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
         selected_batch = None
 
     return selected_batch
+
+
+def unbind_tensor_dict(batch: TensorDict) -> dict:
+    """Pre-unbind every nested tensor in ``batch`` once, for repeated indexing.
+
+    Returns a plain dict mapping each key to either the original tensor/metadata
+    (regular tensors, NonTensorStack, NonTensorData are cheap to index directly)
+    or, for nested tensors, a ``("__nested__", row_list, ragged_idx)`` tuple whose
+    ``row_list`` is the already-unbound per-row views. Pair with
+    ``index_select_unbound`` to select rows without re-unbinding each time.
+
+    This turns an N-partition slicing loop from O(N * batch_size) nested unbinds
+    into a single O(batch_size) unbind up front.
+    """
+    if batch is None:
+        return None
+    prepared = {}
+    for key, tensor in batch.items():
+        if isinstance(tensor, torch.Tensor) and tensor.is_nested:
+            ragged_idx = getattr(tensor, "_ragged_idx", tensor.dim() - 1)
+            prepared[key] = ("__nested__", tensor.unbind(), ragged_idx)
+        else:
+            prepared[key] = tensor
+    return prepared
+
+
+def index_select_unbound(prepared: dict, indices: torch.Tensor | list[int]) -> TensorDict:
+    """Select rows from a dict produced by ``unbind_tensor_dict``.
+
+    Regular tensors / NonTensorStack are indexed directly; nested tensors are
+    rebuilt from the pre-unbound row list. Semantics match
+    ``index_select_tensor_dict`` but without re-unbinding nested tensors.
+    """
+    if isinstance(indices, list):
+        indices = torch.tensor(indices)
+    assert indices.dim() == 1, "indices must be a 1D tensor"
+
+    if prepared is None:
+        return None
+
+    data_dict = {}
+    batch_size = indices.shape[0]
+    for key, value in prepared.items():
+        if isinstance(value, tuple) and len(value) == 3 and value[0] == "__nested__":
+            _, row_list, ragged_idx = value
+            selected_tensors = [row_list[idx] for idx in indices]
+            data_dict[key] = nested_tensor_from_tensor_list(selected_tensors, ragged_idx=ragged_idx)
+        elif isinstance(value, torch.Tensor):
+            data_dict[key] = value[indices]
+        else:
+            # NonTensorStack (indexable by batch dim) or NonTensorData (scalar metadata).
+            if value.shape:
+                data_dict[key] = value[indices]
+            else:
+                data_dict[key] = value
+    return TensorDict(source=data_dict, batch_size=batch_size)
 
 
 def union_tensor_dict(tensor_dict1: TensorDict, tensor_dict2: TensorDict) -> TensorDict:
